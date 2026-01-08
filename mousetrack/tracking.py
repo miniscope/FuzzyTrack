@@ -8,7 +8,7 @@ import os
 from typing import Optional, Dict
 from tqdm import tqdm
 
-from .models import MouseCNN, MouseHeatmapCNN, CoordinateLSTM
+from .models import MouseCNN, MouseHeatmapCNN
 from .config import IMG_SIZE, HEATMAP_SIZE
 from .geometry import load_zone_geometry, get_zone_probabilities, closest_point_on_polyline
 from . import logger
@@ -52,10 +52,8 @@ def is_valid_transition(current_zone: str, new_zone: str, zone_graph: Dict) -> b
         return True
     
     if not zone_graph:
-        is_tube = lambda z: z.startswith('Tube_')
-        is_room = lambda z: z.startswith('Room_')
-        if (is_tube(current_zone) and is_tube(new_zone)) or \
-           (is_room(current_zone) and is_room(new_zone)):
+        if (current_zone.startswith('Tube_') and new_zone.startswith('Tube_')) or \
+           (current_zone.startswith('Room_') and new_zone.startswith('Room_')):
             return False
         return True
     
@@ -116,7 +114,6 @@ def extract_coords_from_heatmap(heatmap: np.ndarray, use_weighted_avg: bool = Tr
 def track_video(
     video_path: str,
     cnn_model_path: str,
-    lstm_model_path: Optional[str],
     output_video: str,
     output_csv: str,
     zone_polygons_file: str,
@@ -124,12 +121,8 @@ def track_video(
     min_confidence: float,
     min_confidence_forbidden: float,
     min_frames_same: int,
-    enable_transition_filter: bool,
-    enable_zone_overlay: bool,
-    zone_color: tuple,
-    overlay_alpha: float,
     max_speed: Optional[float],
-    use_heatmap: bool = False,
+    use_heatmap: bool = True,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
@@ -145,15 +138,6 @@ def track_video(
     cnn.to(device)
     cnn.eval()
     logger.info("CNN model loaded successfully.")
-    
-    # Load LSTM model if provided
-    lstm = None
-    if lstm_model_path and os.path.exists(lstm_model_path):
-        lstm = CoordinateLSTM()
-        lstm.load_state_dict(torch.load(lstm_model_path, map_location=device))
-        lstm.to(device)
-        lstm.eval()
-        logger.info("LSTM model loaded successfully.")
     
     # Load zone geometry
     zone_polygons = load_zone_geometry(zone_polygons_file)
@@ -202,7 +186,6 @@ def track_video(
     # State variables
     current_zone = None
     frames_in_current_zone = 0
-    coord_history = []  # For LSTM if used
     prev_refined_coords = None  # Previous refined coordinates for max_speed constraint
     
     # Warm-up period for stable initialization
@@ -253,32 +236,7 @@ def track_video(
             # Model outputs coordinates directly
             raw_coords = model_out[0].cpu().numpy()
         
-        # LSTM refinement if available
-        if lstm is not None:
-            coord_history.append(raw_coords)
-            # Keep reasonable history (sequence_length frames)
-            max_history = 20  # Reasonable max history
-            if len(coord_history) > max_history:
-                coord_history.pop(0)
-            
-            if len(coord_history) >= 2:  # Need at least 2 for sequence
-                # Convert list of numpy arrays to single numpy array first
-                coord_array = np.array(coord_history, dtype=np.float32)  # (T, 2)
-                
-                # Compute velocity features
-                velocities = np.zeros_like(coord_array)
-                if len(coord_array) > 1:
-                    velocities[1:] = coord_array[1:] - coord_array[:-1]
-                
-                # Combine coordinates and velocity: [x, y, vx, vy]
-                features = np.concatenate([coord_array, velocities], axis=-1)  # (T, 4)
-                seq_tensor = torch.tensor(features, dtype=torch.float32).unsqueeze(0).to(device)  # (1, T, 4)
-                
-                with torch.no_grad():
-                    refined_seq = lstm(seq_tensor)
-                raw_coords = refined_seq[0, -1].detach().cpu().numpy()  # Use last refined coordinate
-        
-        # Apply max_speed constraint if specified (works for both CNN-only and LSTM-refined)
+        # Apply max_speed constraint if specified
         if max_speed is not None and prev_refined_coords is not None:
             movement = raw_coords - prev_refined_coords
             movement_norm = np.linalg.norm(movement)
@@ -298,13 +256,17 @@ def track_video(
         
         if zone_polygons:
             zone_probs = get_zone_probabilities(pred_x, pred_y, zone_polygons, tube_max_distance=20.0, soft_boundary=True, normalize=True)
-            new_zone = max(zone_probs.items(), key=lambda x: x[1])[0] if zone_probs else None
-            pred_confidence = zone_probs.get(new_zone, 0.0) if new_zone else 0.0
+            if zone_probs:
+                new_zone = max(zone_probs, key=zone_probs.get)
+                pred_confidence = zone_probs[new_zone]
+            else:
+                new_zone = None
+                pred_confidence = 0.0
         else:
             new_zone = None
             pred_confidence = 0.0
         
-        if enable_transition_filter and current_zone is not None and new_zone is not None:
+        if current_zone is not None and new_zone is not None:
             if not is_valid_transition(current_zone, new_zone, zone_graph):
                 if zone_polygons:
                     valid_alternatives = []
@@ -313,8 +275,12 @@ def track_video(
                             valid_alternatives.append((alt_zone, alt_prob))
                     
                     if valid_alternatives:
-                        valid_alternatives.sort(key=lambda x: x[1], reverse=True)
-                        best_alt_zone, best_alt_prob = valid_alternatives[0]
+                        best_alt_zone = None
+                        best_alt_prob = 0.0
+                        for alt_zone, alt_prob in valid_alternatives:
+                            if alt_prob > best_alt_prob:
+                                best_alt_prob = alt_prob
+                                best_alt_zone = alt_zone
                         if best_alt_prob >= min_confidence:
                             new_zone = best_alt_zone
                             pred_confidence = best_alt_prob
@@ -336,7 +302,13 @@ def track_video(
                 
                 if frame_idx == warmup_frames - 1:
                     if warmup_zone_candidates:
-                        best_candidate = max(warmup_zone_candidates.items(), key=lambda x: x[1])
+                        best_zone_name = None
+                        best_count = 0
+                        for zone_name, count in warmup_zone_candidates.items():
+                            if count > best_count:
+                                best_count = count
+                                best_zone_name = zone_name
+                        best_candidate = (best_zone_name, best_count)
                         min_consistency = 0.7 if use_heatmap else 0.6
                         if best_candidate[1] >= warmup_frames * min_consistency:
                             current_zone = best_candidate[0]
@@ -355,7 +327,7 @@ def track_video(
         elif new_zone == current_zone:
             frames_in_current_zone += 1
         else:
-            is_valid = is_valid_transition(current_zone, new_zone, zone_graph) if enable_transition_filter else True
+            is_valid = is_valid_transition(current_zone, new_zone, zone_graph)
             required_confidence = min_confidence_forbidden if not is_valid else min_confidence
             
             if pred_confidence >= required_confidence and frames_in_current_zone >= min_frames_same:
@@ -377,8 +349,10 @@ def track_video(
         
         results.append(result_row)
         
-        if enable_zone_overlay and pred_label in zone_polygons:
+        if pred_label in zone_polygons:
             points = zone_polygons[pred_label]
+            zone_color = (100, 200, 100)
+            overlay_alpha = 0.3
             if pred_label.startswith('Room_'):
                 polygon = np.array(points, dtype=np.int32)
                 overlay = frame.copy()

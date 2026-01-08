@@ -52,23 +52,3 @@ class MouseHeatmapCNN(nn.Module):
         heatmap_flat = torch.softmax(heatmap_flat, dim=1)
         heatmap = heatmap_flat.view(batch_size, 1, HEATMAP_SIZE[0], HEATMAP_SIZE[1])
         return heatmap
-
-
-class CoordinateLSTM(nn.Module):
-    def __init__(self, input_size=4, hidden_size=64, num_layers=2, dropout=0.1):
-        super().__init__()
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
-        
-        self.lstm = nn.LSTM(
-            input_size=input_size,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            dropout=dropout if num_layers > 1 else 0,
-            batch_first=True
-        )
-        self.fc = nn.Linear(hidden_size, 2)
-        
-    def forward(self, x):
-        lstm_out, _ = self.lstm(x)
-        return torch.sigmoid(self.fc(lstm_out))

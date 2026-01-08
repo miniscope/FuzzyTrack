@@ -29,17 +29,11 @@ Click mouse positions and select zones for training data.
 mousetrack train-cnn --video assets/video.mp4 --annotations assets/annotations.csv --output models/mouse_cnn.pth
 ```
 
-### 4. Train Coordinate LSTM (optional, for smoothing)
-```bash
-mousetrack train-lstm --cnn-model models/mouse_cnn.pth --video assets/video.mp4 --annotations assets/annotations.csv --output models/mouse_lstm.pth
-```
-
-### 5. Run Tracking
+### 4. Run Tracking
 ```bash
 mousetrack track \
   --video assets/video.mp4 \
   --cnn-model models/mouse_cnn.pth \
-  --lstm-model models/mouse_lstm.pth \
   --output-csv output/tracking_results.csv \
   --output-video output/tracking_results.mp4
 ```
@@ -47,10 +41,9 @@ mousetrack track \
 ## Pipeline Summary
 
 ```
-Video → CNN → Coordinate LSTM → Geometric Classification → Zones
+Video → CNN → Geometric Classification → Zones
 ```
 
-- **CNN**: Finds mouse coordinates from frames
-- **Coordinate LSTM**: Smooths coordinate predictions using temporal context
+- **CNN**: Finds mouse coordinates from frames (supports direct regression or heatmap)
 - **Geometric Classification**: Classifies zones using proximity to polygons/polylines
 - **Hysteresis**: Prevents rapid zone switching for stability

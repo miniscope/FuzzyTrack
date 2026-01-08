@@ -10,7 +10,7 @@ from .config import IMG_SIZE, HEATMAP_SIZE, HEATMAP_SIGMA
 class FrameDataset(Dataset):
     """Dataset for CNN training: loads frames and returns motion difference images."""
     
-    def __init__(self, video_path, csv_path, use_heatmap=False):
+    def __init__(self, video_path, csv_path, use_heatmap=True):
         self.video_path = video_path
         self.df = pd.read_csv(csv_path)
         self.cap = cv2.VideoCapture(video_path)  # Keep open for speed
@@ -99,50 +99,3 @@ class FrameDataset(Dataset):
         heatmap = np.exp(-((x_coords - hm_x)**2 + (y_coords - hm_y)**2) / (2 * sigma**2))
         
         return heatmap
-
-
-class CoordinateSequenceDataset(Dataset):
-    """Dataset for LSTM training: sequences of coordinates."""
-    
-    def __init__(self, input_coordinates, target_coordinates, sequence_length=10, stride=1):
-        """
-        Args:
-            input_coordinates: CNN predictions (noisy input) - List or array of (x, y) coordinates (normalized 0-1)
-            target_coordinates: Ground truth annotations (target) - List or array of (x, y) coordinates (normalized 0-1)
-            sequence_length: Length of input sequences
-            stride: Step size between sequences
-        """
-        self.input_coords = np.array(input_coordinates, dtype=np.float32)
-        self.target_coords = np.array(target_coordinates, dtype=np.float32)
-        self.sequence_length = sequence_length
-        self.stride = stride
-        
-        assert len(self.input_coords) == len(self.target_coords), "Input and target must have same length"
-        
-        # Create sequences
-        self.sequences = []
-        for i in range(0, len(self.input_coords) - sequence_length + 1, stride):
-            input_seq = self.input_coords[i:i + sequence_length]
-            target_seq = self.target_coords[i:i + sequence_length]
-            self.sequences.append((input_seq, target_seq))
-    
-    def __len__(self):
-        return len(self.sequences)
-    
-    def __getitem__(self, idx):
-        # Input: CNN predictions (noisy) with velocity features
-        # Target: Ground truth annotations (clean)
-        input_seq, target_seq = self.sequences[idx]
-        
-        # Compute velocity features for input sequence
-        velocities = np.zeros_like(input_seq)
-        if len(input_seq) > 1:
-            velocities[1:] = input_seq[1:] - input_seq[:-1]
-        
-        # Combine coordinates and velocity: [x, y, vx, vy]
-        input_features = np.concatenate([input_seq, velocities], axis=-1)  # (T, 4)
-        
-        input_features = torch.tensor(input_features, dtype=torch.float32)
-        target_seq = torch.tensor(target_seq, dtype=torch.float32)
-        
-        return input_features, target_seq
