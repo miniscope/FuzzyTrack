@@ -6,6 +6,7 @@ import pandas as pd
 import yaml
 import os
 from typing import Optional, Dict
+from tqdm import tqdm
 
 from .models import MouseCNN, CoordinateLSTM
 from .config import IMG_SIZE
@@ -153,6 +154,8 @@ def track_video(
     
     print("Starting tracking...")
     
+    pbar = tqdm(total=total_frames, desc="Tracking", unit="frame")
+    
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -295,13 +298,11 @@ def track_video(
         
         out_video.write(frame)
         
-        if frame_idx % 100 == 0:
-            progress = (frame_idx / total_frames * 100) if total_frames > 0 else 0
-            print(f"  Processed {frame_idx}/{total_frames} frames ({progress:.1f}%)")
-        
+        pbar.update(1)
         prev_gray = curr_gray
         frame_idx += 1
     
+    pbar.close()
     cap.release()
     out_video.release()
     

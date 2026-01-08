@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
 from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
 import cv2
 import numpy as np
 
@@ -70,9 +71,10 @@ def train_cnn(
     
     print(f"Training on {train_size} samples, validating on {val_size} samples")
     print(f"Video dimensions: {video_width}x{video_height}")
-    print("=" * 60)
     
-    for epoch in range(max_epochs):
+    pbar = tqdm(range(max_epochs), desc="Training CNN")
+    
+    for epoch in pbar:
         # Training
         model.train()
         train_loss = 0
@@ -112,11 +114,14 @@ def train_cnn(
             patience_counter += 1
             status = f"({patience_counter}/{patience})"
         
-        print(f"Epoch {epoch+1:3d}/{max_epochs} | Train: {avg_train_loss:.4f} | "
-              f"Val: {avg_val_loss:.4f} {status}")
+        pbar.set_postfix({
+            'train_loss': f'{avg_train_loss:.4f}',
+            'val_loss': f'{avg_val_loss:.4f}',
+            'status': status
+        })
         
         if patience_counter >= patience:
-            print(f"\nEarly stopping triggered after {epoch+1} epochs")
+            pbar.set_postfix({'status': f'Early stopping at epoch {epoch+1}'})
             break
     
     # Save best model
@@ -177,7 +182,7 @@ def train_lstm(
     ground_truth = []
     
     with torch.no_grad():
-        for imgs, _, target_coords in loader:
+        for imgs, _, target_coords in tqdm(loader, desc="Generating CNN predictions", leave=False):
             imgs = imgs.to(device)
             pred_coords = cnn(imgs)
             cnn_predictions.append(pred_coords[0].cpu().numpy())
@@ -214,9 +219,10 @@ def train_lstm(
     
     print(f"Training on {train_size} sequences, validating on {val_size} sequences")
     print(f"Sequence length: {sequence_length}")
-    print("=" * 60)
     
-    for epoch in range(max_epochs):
+    pbar = tqdm(range(max_epochs), desc="Training LSTM")
+    
+    for epoch in pbar:
         # Training
         model.train()
         train_loss = 0
@@ -256,10 +262,14 @@ def train_lstm(
             patience_counter += 1
             status = f"({patience_counter}/{patience})"
         
-        print(f"Epoch {epoch+1:4d}/{max_epochs} | Train: {avg_train_loss:.4f} | Val: {avg_val_loss:.4f} {status}")
+        pbar.set_postfix({
+            'train_loss': f'{avg_train_loss:.4f}',
+            'val_loss': f'{avg_val_loss:.4f}',
+            'status': status
+        })
         
         if patience_counter >= patience:
-            print(f"\nEarly stopping triggered after {epoch+1} epochs")
+            pbar.set_postfix({'status': f'Early stopping at epoch {epoch+1}'})
             break
     
     # Save best model

@@ -16,6 +16,7 @@ dependencies = [
   "pyyaml",
   "tensorboard>=2.20.0",
   "click>=8.0.0",
+  "tqdm",
 ]
 
 [project.scripts]
