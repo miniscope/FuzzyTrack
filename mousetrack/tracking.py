@@ -8,8 +8,8 @@ import os
 from typing import Optional, Dict
 from tqdm import tqdm
 
-from .models import MouseCNN, CoordinateLSTM
-from .config import IMG_SIZE
+from .models import MouseCNN, MouseHeatmapCNN, CoordinateLSTM
+from .config import IMG_SIZE, HEATMAP_SIZE
 from .geometry import load_zone_geometry, get_zone_probabilities, closest_point_on_polyline
 from . import logger
 
@@ -66,26 +66,81 @@ def is_valid_transition(current_zone: str, new_zone: str, zone_graph: Dict) -> b
     return True
 
 
+def extract_coords_from_heatmap(heatmap: np.ndarray, use_weighted_avg: bool = True) -> tuple[np.ndarray, float]:
+    """Extract coordinates from heatmap.
+    
+    Args:
+        heatmap: Heatmap array, shape (1, H, W) or (H, W)
+        use_weighted_avg: If True, use weighted average (centroid). If False, use argmax.
+    
+    Returns:
+        Tuple of (coordinates, confidence) where confidence is the peak value or entropy-based measure
+    """
+    # heatmap shape: (1, H, W) or (H, W)
+    if heatmap.ndim == 3:
+        heatmap = heatmap[0]
+    
+    h, w = heatmap.shape
+    
+    total = np.sum(heatmap)
+    confidence = np.max(heatmap) if total > 0 else 0.0
+    
+    if use_weighted_avg:
+        # Use weighted average (centroid) for more stable extraction
+        # This is more robust than argmax, especially for noisy heatmaps
+        if total > 0:
+            # Create coordinate grids (0-indexed, so center of pixel 0 is at 0.5)
+            y_coords, x_coords = np.ogrid[:h, :w]
+            # Weighted average
+            hm_x = np.sum(heatmap * x_coords) / total
+            hm_y = np.sum(heatmap * y_coords) / total
+            
+            hm_x = np.clip(hm_x, 0.0, w - 1.0)
+            hm_y = np.clip(hm_y, 0.0, h - 1.0)
+        else:
+            # Fallback to center if heatmap is all zeros
+            hm_x = (w - 1) / 2.0
+            hm_y = (h - 1) / 2.0
+            confidence = 0.0
+    else:
+        # Find peak location (argmax)
+        max_idx = np.unravel_index(np.argmax(heatmap), heatmap.shape)
+        hm_y, hm_x = max_idx
+    
+    norm_x = np.clip(hm_x / (w - 1) if w > 1 else 0.5, 0.0, 1.0)
+    norm_y = np.clip(hm_y / (h - 1) if h > 1 else 0.5, 0.0, 1.0)
+    
+    return np.array([norm_x, norm_y], dtype=np.float32), float(confidence)
+
+
 def track_video(
     video_path: str,
     cnn_model_path: str,
-    lstm_model_path: Optional[str] = None,
-    output_video: str = 'output/tracking_results.mp4',
-    output_csv: str = 'output/tracking_results.csv',
-    zone_polygons_file: str = 'config/zone_polygons.yaml',
-    zone_graph_file: str = 'config/zone_graph.yaml',
-    min_confidence: float = 0.6,
-    min_frames_same: int = 5,
-    enable_transition_filter: bool = True,
-    enable_zone_overlay: bool = True,
-    zone_color: tuple = (100, 200, 100),
-    overlay_alpha: float = 0.3,
-    max_speed: Optional[float] = None,
+    lstm_model_path: Optional[str],
+    output_video: str,
+    output_csv: str,
+    zone_polygons_file: str,
+    zone_graph_file: str,
+    min_confidence: float,
+    min_confidence_forbidden: float,
+    min_frames_same: int,
+    enable_transition_filter: bool,
+    enable_zone_overlay: bool,
+    zone_color: tuple,
+    overlay_alpha: float,
+    max_speed: Optional[float],
+    use_heatmap: bool = False,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # Load CNN model
-    cnn = MouseCNN()
+    if use_heatmap:
+        cnn = MouseHeatmapCNN()
+        logger.info("Loading heatmap CNN model...")
+    else:
+        cnn = MouseCNN()
+        logger.info("Loading coordinate CNN model...")
+    
     cnn.load_state_dict(torch.load(cnn_model_path, map_location=device))
     cnn.to(device)
     cnn.eval()
@@ -150,6 +205,13 @@ def track_video(
     coord_history = []  # For LSTM if used
     prev_refined_coords = None  # Previous refined coordinates for max_speed constraint
     
+    # Warm-up period for stable initialization
+    warmup_frames = 30 if use_heatmap else 5  # Much longer warm-up for heatmap
+    warmup_zone_candidates = {}  # Track zone candidates during warm-up
+    warmup_coords = []  # Track coordinates during warm-up for smoothing
+    heatmap_min_confidence = 0.3  # Minimum heatmap confidence to accept prediction (higher = more strict)
+    min_warmup_confident_frames = 10 if use_heatmap else 3  # Need at least N confident predictions before starting
+    
     results = []
     frame_idx = 0
     
@@ -171,9 +233,25 @@ def track_video(
         
         # CNN inference
         with torch.no_grad():
-            coord_out = cnn(input_tensor)
+            model_out = cnn(input_tensor)
         
-        raw_coords = coord_out[0].cpu().numpy()
+        # Extract coordinates from model output
+        if use_heatmap:
+            # Model outputs heatmap, extract coordinates using weighted average for stability
+            heatmap = model_out[0, 0].cpu().numpy()  # (H, W)
+            raw_coords, heatmap_conf = extract_coords_from_heatmap(heatmap, use_weighted_avg=True)
+            
+            if frame_idx < warmup_frames:
+                if heatmap_conf >= heatmap_min_confidence:
+                    warmup_coords.append(raw_coords.copy())
+                    raw_coords = np.mean(warmup_coords, axis=0)
+                elif len(warmup_coords) >= min_warmup_confident_frames:
+                    raw_coords = np.mean(warmup_coords, axis=0)
+                elif len(warmup_coords) > 0:
+                    raw_coords = warmup_coords[-1].copy()
+        else:
+            # Model outputs coordinates directly
+            raw_coords = model_out[0].cpu().numpy()
         
         # LSTM refinement if available
         if lstm is not None:
@@ -209,15 +287,15 @@ def track_video(
                 movement = movement * (max_speed / movement_norm)
                 raw_coords = prev_refined_coords + movement
         
+        raw_coords = np.clip(raw_coords, 0.0, 1.0)
+        
         # Update previous refined coordinates for next iteration
         prev_refined_coords = raw_coords.copy()
         
-        # Use raw coordinates directly (no smoothing)
         norm_x, norm_y = raw_coords
         pred_x = norm_x * width
         pred_y = norm_y * height
         
-        # Zone classification: geometric proximity
         if zone_polygons:
             zone_probs = get_zone_probabilities(pred_x, pred_y, zone_polygons, tube_max_distance=20.0, soft_boundary=True, normalize=True)
             new_zone = max(zone_probs.items(), key=lambda x: x[1])[0] if zone_probs else None
@@ -226,7 +304,6 @@ def track_video(
             new_zone = None
             pred_confidence = 0.0
         
-        # Zone transition filter
         if enable_transition_filter and current_zone is not None and new_zone is not None:
             if not is_valid_transition(current_zone, new_zone, zone_graph):
                 if zone_polygons:
@@ -248,15 +325,40 @@ def track_video(
                         new_zone = current_zone
                         pred_confidence = zone_probs.get(current_zone, 0.0)
         
-        # Hysteresis
         if current_zone is None:
-            if new_zone:
-                current_zone = new_zone
-                frames_in_current_zone = 1
+            if frame_idx < warmup_frames:
+                if use_heatmap and len(warmup_coords) < min_warmup_confident_frames:
+                    pass
+                elif new_zone and pred_confidence >= min_confidence:
+                    if new_zone not in warmup_zone_candidates:
+                        warmup_zone_candidates[new_zone] = 0
+                    warmup_zone_candidates[new_zone] += 1
+                
+                if frame_idx == warmup_frames - 1:
+                    if warmup_zone_candidates:
+                        best_candidate = max(warmup_zone_candidates.items(), key=lambda x: x[1])
+                        min_consistency = 0.7 if use_heatmap else 0.6
+                        if best_candidate[1] >= warmup_frames * min_consistency:
+                            current_zone = best_candidate[0]
+                            frames_in_current_zone = warmup_frames
+                        else:
+                            required_conf = max(min_confidence, 0.6) if use_heatmap else min_confidence
+                            if new_zone and pred_confidence >= required_conf:
+                                current_zone = new_zone
+                                frames_in_current_zone = 1
+            else:
+                if use_heatmap and len(warmup_coords) < min_warmup_confident_frames:
+                    pass
+                elif new_zone and pred_confidence >= min_confidence:
+                    current_zone = new_zone
+                    frames_in_current_zone = 1
         elif new_zone == current_zone:
             frames_in_current_zone += 1
         else:
-            if pred_confidence >= min_confidence and frames_in_current_zone >= min_frames_same:
+            is_valid = is_valid_transition(current_zone, new_zone, zone_graph) if enable_transition_filter else True
+            required_confidence = min_confidence_forbidden if not is_valid else min_confidence
+            
+            if pred_confidence >= required_confidence and frames_in_current_zone >= min_frames_same:
                 current_zone = new_zone
                 frames_in_current_zone = 1
             else:
@@ -264,11 +366,8 @@ def track_video(
         
         pred_label = current_zone if current_zone else "Unknown"
         
-        # Convert to pixel coordinates
         pixel_x = int(norm_x * width)
         pixel_y = int(norm_y * height)
-        
-        # Store results
         result_row = {
             'frame': frame_idx,
             'zone': pred_label,
@@ -278,7 +377,6 @@ def track_video(
         
         results.append(result_row)
         
-        # Visualization
         if enable_zone_overlay and pred_label in zone_polygons:
             points = zone_polygons[pred_label]
             if pred_label.startswith('Room_'):
@@ -290,11 +388,9 @@ def track_video(
             elif pred_label.startswith('Tube_'):
                 polyline = np.array(points, dtype=np.int32)
                 cv2.polylines(frame, [polyline], False, zone_color, 3)
-                # Draw closest point on polyline to detected coordinate
                 closest_pt = closest_point_on_polyline((pixel_x, pixel_y), polyline)
-                cv2.circle(frame, tuple(closest_pt), 18, (0, 255, 0), -1)  # Green filled circle
+                cv2.circle(frame, tuple(closest_pt), 18, (0, 255, 0), -1)
         
-        # Draw position (red, filled)
         cv2.circle(frame, (pixel_x, pixel_y), 8, (0, 0, 255), -1)
         
         cv2.putText(frame, f"Frame: {frame_idx}", (20, height - 20),

@@ -4,16 +4,17 @@ from torch.utils.data import Dataset
 import cv2
 import pandas as pd
 import numpy as np
-from .config import IMG_SIZE
+from .config import IMG_SIZE, HEATMAP_SIZE, HEATMAP_SIGMA
 
 
 class FrameDataset(Dataset):
     """Dataset for CNN training: loads frames and returns motion difference images."""
     
-    def __init__(self, video_path, csv_path):
+    def __init__(self, video_path, csv_path, use_heatmap=False):
         self.video_path = video_path
         self.df = pd.read_csv(csv_path)
         self.cap = cv2.VideoCapture(video_path)  # Keep open for speed
+        self.use_heatmap = use_heatmap
         
     def __len__(self):
         return len(self.df)
@@ -72,7 +73,32 @@ class FrameDataset(Dataset):
         norm_y = target_y / h_orig
         coords = np.array([norm_x, norm_y], dtype=np.float32)
 
-        return torch.tensor(image), torch.tensor(coords)
+        if self.use_heatmap:
+            # Generate heatmap target
+            heatmap = self._generate_heatmap(norm_x, norm_y, HEATMAP_SIZE[0], HEATMAP_SIZE[1], HEATMAP_SIGMA)
+            # Add channel dimension: (H, W) -> (1, H, W) to match model output
+            heatmap = np.expand_dims(heatmap, axis=0)
+            return torch.tensor(image), torch.tensor(heatmap, dtype=torch.float32)
+        else:
+            return torch.tensor(image), torch.tensor(coords)
+    
+    def _generate_heatmap(self, x, y, h, w, sigma):
+        """Generate Gaussian heatmap from normalized coordinates."""
+        heatmap = np.zeros((h, w), dtype=np.float32)
+        
+        # Convert normalized coordinates to heatmap coordinates
+        hm_x = int(x * w)
+        hm_y = int(y * h)
+        
+        # Clamp to valid range
+        hm_x = np.clip(hm_x, 0, w - 1)
+        hm_y = np.clip(hm_y, 0, h - 1)
+        
+        # Generate Gaussian
+        y_coords, x_coords = np.ogrid[:h, :w]
+        heatmap = np.exp(-((x_coords - hm_x)**2 + (y_coords - hm_y)**2) / (2 * sigma**2))
+        
+        return heatmap
 
 
 class CoordinateSequenceDataset(Dataset):

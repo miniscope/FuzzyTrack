@@ -168,7 +168,12 @@ def get_zone_probabilities(
             elif soft_boundary:
                 dist = cv2.pointPolygonTest(polygon, point, True)
                 if dist > -tube_max_distance:
-                    probs[zone_name] = max(0.0, 1.0 + dist / tube_max_distance)
+                    # Room probability decays much faster when outside
+                    # Use squared decay: probability drops quickly as distance increases
+                    # When dist is negative (outside), use faster decay
+                    normalized_dist = max(0.0, 1.0 + dist / tube_max_distance)  # 0 to 1
+                    # Square it to make it decay faster: 1.0 at edge, 0.0 at max distance
+                    probs[zone_name] = normalized_dist * normalized_dist
     
     for zone_name, polyline in zone_polygons.items():
         if zone_name.startswith('Tube_'):

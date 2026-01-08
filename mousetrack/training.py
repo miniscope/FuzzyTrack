@@ -8,22 +8,24 @@ from tqdm import tqdm
 import cv2
 import numpy as np
 
-from .models import MouseCNN, CoordinateLSTM
+from .models import MouseCNN, MouseHeatmapCNN, CoordinateLSTM
 from .dataset import FrameDataset, CoordinateSequenceDataset
-from .config import IMG_SIZE
+from .config import IMG_SIZE, HEATMAP_SIZE
 from . import logger
+import pandas as pd
 
 
 def train_cnn(
     video_path: str,
     annotations_path: str,
-    output_path: str = "mouse_cnn.pth",
-    batch_size: int = 16,
-    max_epochs: int = 100,
-    patience: int = 10,
-    val_split: float = 0.2,
-    learning_rate: float = 5e-4,
-    logdir: str = "runs/mouse_tracker",
+    output_path: str,
+    batch_size: int,
+    max_epochs: int,
+    patience: int,
+    val_split: float,
+    learning_rate: float,
+    logdir: str,
+    use_heatmap: bool,
 ):
     """
     Train CNN model for coordinate prediction.
@@ -38,9 +40,10 @@ def train_cnn(
         val_split: Validation split ratio
         learning_rate: Learning rate
         logdir: TensorBoard log directory
+        use_heatmap: If True, use heatmap regression instead of direct coordinates
     """
     # Load dataset
-    full_dataset = FrameDataset(video_path, annotations_path)
+    full_dataset = FrameDataset(video_path, annotations_path, use_heatmap=use_heatmap)
     val_size = int(len(full_dataset) * val_split)
     train_size = len(full_dataset) - val_size
     train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
@@ -49,9 +52,13 @@ def train_cnn(
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
     # Model and optimizer
-    model = MouseCNN()
+    if use_heatmap:
+        model = MouseHeatmapCNN()
+        criterion = nn.MSELoss()  # MSE loss on heatmaps
+    else:
+        model = MouseCNN()
+        criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    criterion = nn.MSELoss()
     
     # Get video dimensions
     cap = cv2.VideoCapture(video_path)
@@ -79,10 +86,10 @@ def train_cnn(
         # Training
         model.train()
         train_loss = 0
-        for imgs, targets_coords in train_loader:
+        for imgs, targets in train_loader:
             optimizer.zero_grad()
-            pred_coords = model(imgs)
-            loss = criterion(pred_coords, targets_coords)
+            pred = model(imgs)
+            loss = criterion(pred, targets)
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
@@ -93,9 +100,9 @@ def train_cnn(
         model.eval()
         val_loss = 0
         with torch.no_grad():
-            for imgs, targets_coords in val_loader:
-                pred_coords = model(imgs)
-                loss = criterion(pred_coords, targets_coords)
+            for imgs, targets in val_loader:
+                pred = model(imgs)
+                loss = criterion(pred, targets)
                 val_loss += loss.item()
         
         avg_val_loss = val_loss / len(val_loader)
@@ -175,22 +182,108 @@ def train_lstm(
     cnn.to(device)
     cnn.eval()
     
-    # Generate CNN predictions
-    dataset = FrameDataset(video_path, annotations_path)
-    loader = DataLoader(dataset, batch_size=1, shuffle=False)
+    # Load annotations
+    annotations_df = pd.read_csv(annotations_path)
+    annotated_frames = set(annotations_df['frame_idx'].values)
+    frame_to_gt = {row['frame_idx']: np.array([row['x'], row['y']], dtype=np.float32) 
+                   for _, row in annotations_df.iterrows()}
+    
+    # Get video info
+    cap = cv2.VideoCapture(video_path)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
+    
+    # Only generate sequences near annotated frames (within window)
+    # This avoids inaccurate interpolation over large gaps
+    max_gap_from_annotation = sequence_length * 2  # Allow sequences up to 2x sequence_length away from annotations
+    
+    # Find frame ranges that are close to annotations
+    annotated_list = sorted(annotated_frames)
+    valid_frame_ranges = []
+    for ann_frame in annotated_list:
+        start = max(0, ann_frame - max_gap_from_annotation)
+        end = min(total_frames, ann_frame + max_gap_from_annotation + 1)
+        valid_frame_ranges.append((start, end))
+    
+    # Merge overlapping ranges
+    valid_frame_ranges.sort()
+    merged_ranges = []
+    for start, end in valid_frame_ranges:
+        if merged_ranges and start <= merged_ranges[-1][1]:
+            merged_ranges[-1] = (merged_ranges[-1][0], max(merged_ranges[-1][1], end))
+        else:
+            merged_ranges.append((start, end))
+    
+    # Generate CNN predictions only for valid frame ranges
+    cap = cv2.VideoCapture(video_path)
+    ret, prev_frame = cap.read()
+    if not ret:
+        logger.error("Error reading video")
+        return
+    
+    prev_gray = cv2.resize(prev_frame, IMG_SIZE)
+    prev_gray = cv2.cvtColor(prev_gray, cv2.COLOR_BGR2GRAY)
     
     cnn_predictions = []
     ground_truth = []
+    frame_indices = []
     
     with torch.no_grad():
-        for imgs, _, target_coords in tqdm(loader, desc="Generating CNN predictions", leave=False):
-            imgs = imgs.to(device)
-            pred_coords = cnn(imgs)
-            cnn_predictions.append(pred_coords[0].cpu().numpy())
-            ground_truth.append(target_coords[0].cpu().numpy())
+        for frame_idx in tqdm(range(total_frames), desc="Generating CNN predictions", leave=False):
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            # Check if frame is in valid range
+            in_valid_range = any(start <= frame_idx < end for start, end in merged_ranges)
+            if not in_valid_range:
+                prev_gray = cv2.cvtColor(cv2.resize(frame, IMG_SIZE), cv2.COLOR_BGR2GRAY)
+                continue
+            
+            # Preprocess
+            curr_small = cv2.resize(frame, IMG_SIZE)
+            curr_gray = cv2.cvtColor(curr_small, cv2.COLOR_BGR2GRAY)
+            diff = cv2.absdiff(curr_gray, prev_gray)
+            input_img = diff.astype(np.float32) / 255.0
+            input_tensor = torch.tensor(input_img).unsqueeze(0).unsqueeze(0).to(device)
+            
+            # CNN prediction
+            pred_coords = cnn(input_tensor)
+            pred_norm = pred_coords[0].cpu().numpy()
+            cnn_predictions.append(pred_norm)
+            frame_indices.append(frame_idx)
+            
+            # Ground truth: use annotation if available, otherwise interpolate between nearest annotations
+            if frame_idx in frame_to_gt:
+                gt_pixel = frame_to_gt[frame_idx]
+                gt_norm = np.array([gt_pixel[0] / width, gt_pixel[1] / height], dtype=np.float32)
+            else:
+                # Linear interpolation between surrounding annotations
+                left_idx = max([f for f in annotated_list if f < frame_idx], default=None)
+                right_idx = min([f for f in annotated_list if f > frame_idx], default=None)
+                if left_idx is not None and right_idx is not None:
+                    # Interpolate between left and right annotations
+                    alpha = (frame_idx - left_idx) / (right_idx - left_idx)
+                    left_gt = frame_to_gt[left_idx]
+                    right_gt = frame_to_gt[right_idx]
+                    gt_pixel = left_gt * (1 - alpha) + right_gt * alpha
+                elif left_idx is not None:
+                    gt_pixel = frame_to_gt[left_idx]
+                else:
+                    gt_pixel = frame_to_gt[right_idx]
+                gt_norm = np.array([gt_pixel[0] / width, gt_pixel[1] / height], dtype=np.float32)
+            
+            ground_truth.append(gt_norm)
+            prev_gray = curr_gray
+    
+    cap.release()
     
     cnn_predictions = np.array(cnn_predictions)
     ground_truth = np.array(ground_truth)
+    
+    logger.info(f"Generated {len(cnn_predictions)} predictions from {len(merged_ranges)} valid ranges near annotations")
     
     # Create sequence dataset
     seq_dataset = CoordinateSequenceDataset(
