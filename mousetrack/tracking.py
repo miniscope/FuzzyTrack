@@ -74,7 +74,7 @@ def track_video(
     output_csv: str = 'output/tracking_results.csv',
     zone_polygons_file: str = 'config/zone_polygons.yaml',
     zone_graph_file: str = 'config/zone_graph.yaml',
-    min_confidence: float = 0.3,
+    min_confidence: float = 0.7,
     min_frames_same: int = 5,
     enable_transition_filter: bool = True,
     enable_zone_overlay: bool = True,
@@ -218,23 +218,10 @@ def track_video(
         pred_y = norm_y * height
         
         # Zone classification: geometric proximity
-        # Use normalized probabilities for state tracking (better for crossing routes)
-        active_zones = []
         if zone_polygons:
-            # Get normalized probabilities for state tracking (like old version)
             zone_probs = get_zone_probabilities(pred_x, pred_y, zone_polygons, tube_max_distance=20.0, soft_boundary=True, normalize=True)
-            
-            # Select highest probability zone for state tracking (like old version)
             new_zone = max(zone_probs.items(), key=lambda x: x[1])[0] if zone_probs else None
             pred_confidence = zone_probs.get(new_zone, 0.0) if new_zone else 0.0
-            
-            # Get all zones above confidence threshold (for visualization)
-            for zone_name, prob in zone_probs.items():
-                if prob >= min_confidence:
-                    active_zones.append((zone_name, prob))
-            
-            # Sort by confidence (highest first)
-            active_zones.sort(key=lambda x: x[1], reverse=True)
         else:
             new_zone = None
             pred_confidence = 0.0
@@ -255,16 +242,11 @@ def track_video(
                             new_zone = best_alt_zone
                             pred_confidence = best_alt_prob
                         else:
-                            # Keep current zone and use its probability, but ensure it's at least min_confidence
-                            # to prevent oscillation at cross sections
                             new_zone = current_zone
-                            current_prob = zone_probs.get(current_zone, 0.0)
-                            pred_confidence = max(current_prob, min_confidence)
+                            pred_confidence = zone_probs.get(current_zone, 0.0)
                     else:
-                        # Keep current zone and use its probability, but ensure it's at least min_confidence
                         new_zone = current_zone
-                        current_prob = zone_probs.get(current_zone, 0.0)
-                        pred_confidence = max(current_prob, min_confidence)
+                        pred_confidence = zone_probs.get(current_zone, 0.0)
         
         # Hysteresis
         if current_zone is None:
@@ -296,23 +278,21 @@ def track_video(
         
         results.append(result_row)
         
-        # Visualization: show all active zones
-        if enable_zone_overlay and zone_polygons:
-            for zone_name, zone_conf in active_zones:
-                if zone_name in zone_polygons:
-                    points = zone_polygons[zone_name]
-                    if zone_name.startswith('Room_'):
-                        polygon = np.array(points, dtype=np.int32)
-                        overlay = frame.copy()
-                        cv2.fillPoly(overlay, [polygon], zone_color)
-                        cv2.addWeighted(overlay, overlay_alpha, frame, 1 - overlay_alpha, 0, frame)
-                        cv2.polylines(frame, [polygon], True, zone_color, 3)
-                    elif zone_name.startswith('Tube_'):
-                        polyline = np.array(points, dtype=np.int32)
-                        cv2.polylines(frame, [polyline], False, zone_color, 3)
-                        # Draw closest point on polyline to detected coordinate
-                        closest_pt = closest_point_on_polyline((pixel_x, pixel_y), polyline)
-                        cv2.circle(frame, tuple(closest_pt), 18, (0, 255, 0), -1)  # Green filled circle
+        # Visualization
+        if enable_zone_overlay and pred_label in zone_polygons:
+            points = zone_polygons[pred_label]
+            if pred_label.startswith('Room_'):
+                polygon = np.array(points, dtype=np.int32)
+                overlay = frame.copy()
+                cv2.fillPoly(overlay, [polygon], zone_color)
+                cv2.addWeighted(overlay, overlay_alpha, frame, 1 - overlay_alpha, 0, frame)
+                cv2.polylines(frame, [polygon], True, zone_color, 3)
+            elif pred_label.startswith('Tube_'):
+                polyline = np.array(points, dtype=np.int32)
+                cv2.polylines(frame, [polyline], False, zone_color, 3)
+                # Draw closest point on polyline to detected coordinate
+                closest_pt = closest_point_on_polyline((pixel_x, pixel_y), polyline)
+                cv2.circle(frame, tuple(closest_pt), 18, (0, 255, 0), -1)  # Green filled circle
         
         # Draw position (red, filled)
         cv2.circle(frame, (pixel_x, pixel_y), 8, (0, 0, 255), -1)
