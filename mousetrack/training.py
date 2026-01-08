@@ -11,6 +11,7 @@ import numpy as np
 from .models import MouseCNN, CoordinateLSTM
 from .dataset import FrameDataset, CoordinateSequenceDataset
 from .config import IMG_SIZE
+from . import logger
 
 
 def train_cnn(
@@ -69,8 +70,8 @@ def train_cnn(
     patience_counter = 0
     best_model_state = None
     
-    print(f"Training on {train_size} samples, validating on {val_size} samples")
-    print(f"Video dimensions: {video_width}x{video_height}")
+    logger.info(f"Training on {train_size} samples, validating on {val_size} samples")
+    logger.info(f"Video dimensions: {video_width}x{video_height}")
     
     pbar = tqdm(range(max_epochs), desc="Training CNN")
     
@@ -127,12 +128,12 @@ def train_cnn(
     # Save best model
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
-        print(f"\nRestored best model (val_loss: {best_val_loss:.4f})")
+        logger.info(f"Restored best model (val_loss: {best_val_loss:.4f})")
     
     torch.save(model.state_dict(), output_path)
     writer.close()
-    print(f"✓ Model saved to {output_path}")
-    print(f"TensorBoard logs saved to {logdir}")
+    logger.info(f"Model saved to {output_path}")
+    logger.info(f"TensorBoard logs saved to {logdir}")
 
 
 def train_lstm(
@@ -217,8 +218,8 @@ def train_lstm(
     best_model_state = None
     patience_counter = 0
     
-    print(f"Training on {train_size} sequences, validating on {val_size} sequences")
-    print(f"Sequence length: {sequence_length}")
+    logger.info(f"Training on {train_size} sequences, validating on {val_size} sequences")
+    logger.info(f"Sequence length: {sequence_length}")
     
     pbar = tqdm(range(max_epochs), desc="Training LSTM")
     
@@ -275,7 +276,7 @@ def train_lstm(
     # Save best model
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
-        print(f"\nRestored best model (val_loss: {best_val_loss:.4f})")
+        logger.info(f"Restored best model (val_loss: {best_val_loss:.4f})")
     
     torch.save(model.state_dict(), output_path)
-    print(f"✓ Model saved to {output_path}")
+    logger.info(f"Model saved to {output_path}")

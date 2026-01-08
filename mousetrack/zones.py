@@ -4,6 +4,8 @@ import yaml
 import numpy as np
 from typing import Dict, List
 
+from . import logger
+
 
 ZONES = ['Room_1', 'Room_2', 'Room_3', 'Tube_1', 'Tube_2', 'Tube_3', 'Tube_4']
 
@@ -41,7 +43,7 @@ def define_zones(
         nonlocal current_polygon
         if event == cv2.EVENT_LBUTTONDOWN:
             current_polygon.append([x, y])
-            print(f"  Added point ({x}, {y}) - {len(current_polygon)} points total")
+            logger.info(f"  Added point ({x}, {y}) - {len(current_polygon)} points total")
             redraw_frame()
     
     def redraw_frame():
@@ -80,7 +82,7 @@ def define_zones(
     
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        print(f"Error opening video: {video_path}")
+        logger.error(f"Error opening video: {video_path}")
         return
     
     # Load existing polygons
@@ -90,15 +92,15 @@ def define_zones(
             for zone in ZONES:
                 if zone in existing and existing[zone]:
                     polygons[zone] = existing[zone]
-                    print(f"Loaded existing polygon for {zone} ({len(existing[zone])} points)")
+                    logger.info(f"Loaded existing polygon for {zone} ({len(existing[zone])} points)")
     except FileNotFoundError:
-        print("No existing polygons found. Starting fresh.")
+        logger.info("No existing polygons found. Starting fresh.")
     except Exception as e:
-        print(f"Warning: Could not load existing polygons: {e}")
+        logger.warning(f"Could not load existing polygons: {e}")
     
     ret, frame = cap.read()
     if not ret:
-        print("Error reading video")
+        logger.error("Error reading video")
         return
     
     cv2.namedWindow('Zone Definition Tool', cv2.WINDOW_NORMAL)
@@ -107,17 +109,17 @@ def define_zones(
     current_zone = ZONES[current_zone_idx]
     current_polygon = polygons[current_zone].copy() if polygons[current_zone] else []
     
-    print("\n=== Zone Definition Tool ===")
-    print(f"Current zone: {current_zone}")
-    print("Instructions:")
-    print("  - LEFT CLICK: Add point to polygon")
-    print("  - ENTER: Finish current polygon and move to next zone")
-    print("  - 'n': Next zone (without finishing current)")
-    print("  - 'p': Previous zone")
-    print("  - 'r': Reset current polygon")
-    print("  - 's': Save polygons to file")
-    print("  - 'q': Quit")
-    print()
+    logger.info("\n=== Zone Definition Tool ===")
+    logger.info(f"Current zone: {current_zone}")
+    logger.info("Instructions:")
+    logger.info("  - LEFT CLICK: Add point to polygon")
+    logger.info("  - ENTER: Finish current polygon and move to next zone")
+    logger.info("  - 'n': Next zone (without finishing current)")
+    logger.info("  - 'p': Previous zone")
+    logger.info("  - 'r': Reset current polygon")
+    logger.info("  - 's': Save polygons to file")
+    logger.info("  - 'q': Quit")
+    logger.info("")
     
     redraw_frame()
     
@@ -132,32 +134,32 @@ def define_zones(
                     if final_poly[-1] == final_poly[0]:
                         final_poly = final_poly[:-1]
                 polygons[current_zone] = final_poly
-                print(f"✓ Finished {current_zone} with {len(final_poly)} points")
+                logger.info(f"Finished {current_zone} with {len(final_poly)} points")
                 current_zone_idx = (current_zone_idx + 1) % len(ZONES)
                 current_zone = ZONES[current_zone_idx]
                 current_polygon = polygons[current_zone].copy() if polygons[current_zone] else []
-                print(f"\nNow defining: {current_zone}")
+                logger.info(f"\nNow defining: {current_zone}")
             else:
-                print(f"Need at least {min_points} points! Currently have {len(current_polygon)}")
+                logger.info(f"Need at least {min_points} points! Currently have {len(current_polygon)}")
             redraw_frame()
         
         elif key == ord('n'):
             current_zone_idx = (current_zone_idx + 1) % len(ZONES)
             current_zone = ZONES[current_zone_idx]
             current_polygon = polygons[current_zone].copy() if polygons[current_zone] else []
-            print(f"Switched to: {current_zone}")
+            logger.info(f"Switched to: {current_zone}")
             redraw_frame()
         
         elif key == ord('p'):
             current_zone_idx = (current_zone_idx - 1) % len(ZONES)
             current_zone = ZONES[current_zone_idx]
             current_polygon = polygons[current_zone].copy() if polygons[current_zone] else []
-            print(f"Switched to: {current_zone}")
+            logger.info(f"Switched to: {current_zone}")
             redraw_frame()
         
         elif key == ord('r'):
             current_polygon = []
-            print(f"Reset {current_zone}")
+            logger.info(f"Reset {current_zone}")
             redraw_frame()
         
         elif key == ord('s'):
@@ -176,9 +178,9 @@ def define_zones(
                     f.write(f"{zone}:\n")
                     for point in points:
                         f.write(f"  - [{point[0]}, {point[1]}]\n")
-            print(f"\n✓ Saved {len(save_data)} zones to {output_file}")
+            logger.info(f"\nSaved {len(save_data)} zones to {output_file}")
             for zone, poly in save_data.items():
-                print(f"  - {zone}: {len(poly)} points")
+                logger.info(f"  - {zone}: {len(poly)} points")
         
         elif key == ord('q'):
             break
@@ -200,7 +202,7 @@ def define_zones(
                 f.write(f"{zone}:\n")
                 for point in points:
                     f.write(f"  - [{point[0]}, {point[1]}]\n")
-        print(f"\n✓ Saved {len(save_data)} zones to {output_file}")
+        logger.info(f"\nSaved {len(save_data)} zones to {output_file}")
     
     cap.release()
     cv2.destroyAllWindows()

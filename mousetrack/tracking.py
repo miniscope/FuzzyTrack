@@ -10,7 +10,8 @@ from tqdm import tqdm
 
 from .models import MouseCNN, CoordinateLSTM
 from .config import IMG_SIZE
-from .geometry import load_zone_geometry, get_zone_probabilities
+from .geometry import load_zone_geometry, get_zone_probabilities, closest_point_on_polyline
+from . import logger
 
 
 def load_zone_graph(zone_graph_file: str = 'config/zone_graph.yaml') -> Dict:
@@ -42,7 +43,7 @@ def load_zone_graph(zone_graph_file: str = 'config/zone_graph.yaml') -> Dict:
                 
                 return bidirectional_zones
         except Exception as e:
-            print(f"Warning: Could not load {zone_graph_file}: {e}")
+            logger.warning(f"Could not load {zone_graph_file}: {e}")
     return {}
 
 
@@ -73,7 +74,7 @@ def track_video(
     output_csv: str = 'output/tracking_results.csv',
     zone_polygons_file: str = 'config/zone_polygons.yaml',
     zone_graph_file: str = 'config/zone_graph.yaml',
-    min_confidence: float = 0.6,
+    min_confidence: float = 0.3,
     min_frames_same: int = 5,
     enable_transition_filter: bool = True,
     enable_zone_overlay: bool = True,
@@ -88,7 +89,7 @@ def track_video(
     cnn.load_state_dict(torch.load(cnn_model_path, map_location=device))
     cnn.to(device)
     cnn.eval()
-    print("CNN model loaded successfully.")
+    logger.info("CNN model loaded successfully.")
     
     # Load LSTM model if provided
     lstm = None
@@ -97,14 +98,14 @@ def track_video(
         lstm.load_state_dict(torch.load(lstm_model_path, map_location=device))
         lstm.to(device)
         lstm.eval()
-        print("LSTM model loaded successfully.")
+        logger.info("LSTM model loaded successfully.")
     
     # Load zone geometry
     zone_polygons = load_zone_geometry(zone_polygons_file)
     if not zone_polygons:
-        print(f"Warning: No zone polygons found in {zone_polygons_file}")
+        logger.warning(f"No zone polygons found in {zone_polygons_file}")
     else:
-        print(f"Loaded {len(zone_polygons)} zone polygons")
+        logger.info(f"Loaded {len(zone_polygons)} zone polygons")
     
     # Load zone graph
     zone_graph = load_zone_graph(zone_graph_file)
@@ -112,7 +113,7 @@ def track_video(
     # Open video
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        print(f"Error opening video: {video_path}")
+        logger.error(f"Error opening video: {video_path}")
         return
     
     fps = int(cap.get(cv2.CAP_PROP_FPS))
@@ -120,22 +121,22 @@ def track_video(
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
-    print(f"Input video: {width}x{height} @ {fps} fps, {total_frames} frames")
+    logger.info(f"Input video: {width}x{height} @ {fps} fps, {total_frames} frames")
     
     # Create video writer
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out_video = cv2.VideoWriter(output_video, fourcc, fps, (width, height))
     if not out_video.isOpened():
-        print(f"Error creating output video: {output_video}")
+        logger.error(f"Error creating output video: {output_video}")
         cap.release()
         return
     
-    print(f"Output video: {output_video}")
+    logger.info(f"Output video: {output_video}")
     
     # Prepare for processing
     ret, prev_frame = cap.read()
     if not ret:
-        print("Error reading first frame.")
+        logger.error("Error reading first frame.")
         cap.release()
         out_video.release()
         return
@@ -152,7 +153,7 @@ def track_video(
     results = []
     frame_idx = 0
     
-    print("Starting tracking...")
+    logger.info("Starting tracking...")
     
     pbar = tqdm(total=total_frames, desc="Tracking", unit="frame")
     
@@ -217,10 +218,23 @@ def track_video(
         pred_y = norm_y * height
         
         # Zone classification: geometric proximity
+        # Use normalized probabilities for state tracking (better for crossing routes)
+        active_zones = []
         if zone_polygons:
-            zone_probs = get_zone_probabilities(pred_x, pred_y, zone_polygons, tube_max_distance=20.0, soft_boundary=True)
+            # Get normalized probabilities for state tracking (like old version)
+            zone_probs = get_zone_probabilities(pred_x, pred_y, zone_polygons, tube_max_distance=20.0, soft_boundary=True, normalize=True)
+            
+            # Select highest probability zone for state tracking (like old version)
             new_zone = max(zone_probs.items(), key=lambda x: x[1])[0] if zone_probs else None
             pred_confidence = zone_probs.get(new_zone, 0.0) if new_zone else 0.0
+            
+            # Get all zones above confidence threshold (for visualization)
+            for zone_name, prob in zone_probs.items():
+                if prob >= min_confidence:
+                    active_zones.append((zone_name, prob))
+            
+            # Sort by confidence (highest first)
+            active_zones.sort(key=lambda x: x[1], reverse=True)
         else:
             new_zone = None
             pred_confidence = 0.0
@@ -241,11 +255,16 @@ def track_video(
                             new_zone = best_alt_zone
                             pred_confidence = best_alt_prob
                         else:
+                            # Keep current zone and use its probability, but ensure it's at least min_confidence
+                            # to prevent oscillation at cross sections
                             new_zone = current_zone
-                            pred_confidence = zone_probs.get(current_zone, 0.0)
+                            current_prob = zone_probs.get(current_zone, 0.0)
+                            pred_confidence = max(current_prob, min_confidence)
                     else:
+                        # Keep current zone and use its probability, but ensure it's at least min_confidence
                         new_zone = current_zone
-                        pred_confidence = zone_probs.get(current_zone, 0.0)
+                        current_prob = zone_probs.get(current_zone, 0.0)
+                        pred_confidence = max(current_prob, min_confidence)
         
         # Hysteresis
         if current_zone is None:
@@ -277,18 +296,23 @@ def track_video(
         
         results.append(result_row)
         
-        # Visualization
-        if enable_zone_overlay and pred_label in zone_polygons:
-            points = zone_polygons[pred_label]
-            if pred_label.startswith('Room_'):
-                polygon = np.array(points, dtype=np.int32)
-                overlay = frame.copy()
-                cv2.fillPoly(overlay, [polygon], zone_color)
-                cv2.addWeighted(overlay, overlay_alpha, frame, 1 - overlay_alpha, 0, frame)
-                cv2.polylines(frame, [polygon], True, zone_color, 3)
-            elif pred_label.startswith('Tube_'):
-                polyline = np.array(points, dtype=np.int32)
-                cv2.polylines(frame, [polyline], False, zone_color, 3)
+        # Visualization: show all active zones
+        if enable_zone_overlay and zone_polygons:
+            for zone_name, zone_conf in active_zones:
+                if zone_name in zone_polygons:
+                    points = zone_polygons[zone_name]
+                    if zone_name.startswith('Room_'):
+                        polygon = np.array(points, dtype=np.int32)
+                        overlay = frame.copy()
+                        cv2.fillPoly(overlay, [polygon], zone_color)
+                        cv2.addWeighted(overlay, overlay_alpha, frame, 1 - overlay_alpha, 0, frame)
+                        cv2.polylines(frame, [polygon], True, zone_color, 3)
+                    elif zone_name.startswith('Tube_'):
+                        polyline = np.array(points, dtype=np.int32)
+                        cv2.polylines(frame, [polyline], False, zone_color, 3)
+                        # Draw closest point on polyline to detected coordinate
+                        closest_pt = closest_point_on_polyline((pixel_x, pixel_y), polyline)
+                        cv2.circle(frame, tuple(closest_pt), 18, (0, 255, 0), -1)  # Green filled circle
         
         # Draw position (red, filled)
         cv2.circle(frame, (pixel_x, pixel_y), 8, (0, 0, 255), -1)
@@ -309,8 +333,8 @@ def track_video(
     # Save CSV
     df = pd.DataFrame(results)
     df.to_csv(output_csv, index=False)
-    print("\nTracking complete!")
-    print(f"  - Video saved to: {output_video}")
-    print(f"  - CSV saved to: {output_csv}")
-    print(f"  - Total frames processed: {frame_idx}")
+    logger.info("Tracking complete!")
+    logger.info(f"  - Video saved to: {output_video}")
+    logger.info(f"  - CSV saved to: {output_csv}")
+    logger.info(f"  - Total frames processed: {frame_idx}")
     

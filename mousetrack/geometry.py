@@ -5,6 +5,8 @@ import cv2
 import yaml
 from typing import Dict, Tuple, Optional, List
 
+from . import logger
+
 
 def point_in_polygon(point: Tuple[float, float], polygon: np.ndarray) -> bool:
     """Check if a point is inside a polygon using OpenCV's pointPolygonTest."""
@@ -52,6 +54,53 @@ def _point_to_segment_distance(point: Tuple[float, float], seg_start: np.ndarray
     return np.linalg.norm(point - closest)
 
 
+def closest_point_on_polyline(point: Tuple[float, float], polyline: np.ndarray) -> np.ndarray:
+    """
+    Find the closest point on a polyline to a given point.
+    
+    Args:
+        point: (x, y) coordinate
+        polyline: Array of points defining the polyline
+    
+    Returns:
+        Closest point on the polyline as (x, y) numpy array
+    """
+    point = np.array(point, dtype=np.float32)
+    polyline = np.array(polyline, dtype=np.float32)
+    
+    min_dist = float('inf')
+    closest_point = None
+    
+    for i in range(len(polyline) - 1):
+        p1 = polyline[i]
+        p2 = polyline[i + 1]
+        
+        # Vector from p1 to p2
+        seg_vec = p2 - p1
+        # Vector from p1 to point
+        point_vec = point - p1
+        
+        # Project point_vec onto seg_vec
+        seg_len_sq = np.dot(seg_vec, seg_vec)
+        if seg_len_sq == 0:
+            # Segment is a point
+            candidate = p1
+        else:
+            t = np.clip(np.dot(point_vec, seg_vec) / seg_len_sq, 0.0, 1.0)
+            candidate = p1 + t * seg_vec
+        
+        dist = np.linalg.norm(point - candidate)
+        if dist < min_dist:
+            min_dist = dist
+            closest_point = candidate
+    
+    # If polyline has only one point
+    if closest_point is None and len(polyline) > 0:
+        closest_point = polyline[0]
+    
+    return closest_point.astype(np.int32)
+
+
 def load_zone_geometry(zone_polygons_file: str = 'config/zone_polygons.yaml') -> Dict[str, np.ndarray]:
     """Load zone polygons from YAML file."""
     polygons = {}
@@ -63,7 +112,7 @@ def load_zone_geometry(zone_polygons_file: str = 'config/zone_polygons.yaml') ->
                     if points:
                         polygons[zone] = np.array(points, dtype=np.int32)
         except Exception as e:
-            print(f"Warning: Could not load {zone_polygons_file}: {e}")
+            logger.warning(f"Could not load {zone_polygons_file}: {e}")
     return polygons
 
 
@@ -106,7 +155,8 @@ def get_zone_probabilities(
     y: float,
     zone_polygons: Dict[str, np.ndarray],
     tube_max_distance: float = 40.0,
-    soft_boundary: bool = True
+    soft_boundary: bool = True,
+    normalize: bool = True
 ) -> Dict[str, float]:
     point = (float(x), float(y))
     probs = {zone: 0.0 for zone in zone_polygons.keys()}
@@ -135,9 +185,10 @@ def get_zone_probabilities(
                 else:
                     probs[zone_name] = 1.0
     
-    total = sum(probs.values())
-    if total > 0:
-        for zone in probs:
-            probs[zone] /= total
+    if normalize:
+        total = sum(probs.values())
+        if total > 0:
+            for zone in probs:
+                probs[zone] /= total
     
     return probs

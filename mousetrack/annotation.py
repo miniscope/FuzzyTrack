@@ -6,6 +6,7 @@ import numpy as np
 from typing import Optional
 
 from .geometry import load_zone_geometry
+from . import logger
 
 
 KEY_MAP = {
@@ -40,14 +41,14 @@ def annotate_video(
         nonlocal current_click
         if event == cv2.EVENT_LBUTTONDOWN:
             current_click = (x, y)
-            print(f"Clicked at: {current_click}")
+            logger.info(f"Clicked at: {current_click}")
     
     # Load zone polygons
     zone_polygons = load_zone_geometry(zone_polygons_file)
     if zone_polygons:
-        print(f"Loaded {len(zone_polygons)} zone polygons for highlighting")
+        logger.info(f"Loaded {len(zone_polygons)} zone polygons for highlighting")
     else:
-        print(f"Warning: No zone polygons found in {zone_polygons_file}")
+        logger.warning(f"No zone polygons found in {zone_polygons_file}")
     
     cap = cv2.VideoCapture(video_path)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -57,13 +58,13 @@ def annotate_video(
     
     events = []
     
-    print("--- INSTRUCTIONS ---")
-    print("1. CLICK on the mouse/light center.")
-    print("2. PRESS key to select zone:")
-    print("   - '1', '2', '3' for Rooms")
-    print("   - 'q', 'w', 'e', 'r' for Tubes")
-    print("3. Press ENTER to confirm annotation")
-    print("   (Press 'n' to skip frame, 'ESC' to quit)")
+    logger.info("--- INSTRUCTIONS ---")
+    logger.info("1. CLICK on the mouse/light center.")
+    logger.info("2. PRESS key to select zone:")
+    logger.info("   - '1', '2', '3' for Rooms")
+    logger.info("   - 'q', 'w', 'e', 'r' for Tubes")
+    logger.info("3. Press ENTER to confirm annotation")
+    logger.info("   (Press 'n' to skip frame, 'ESC' to quit)")
     
     cv2.namedWindow('Annotator', cv2.WINDOW_AUTOSIZE)
     cv2.setMouseCallback('Annotator', mouse_callback)
@@ -131,22 +132,22 @@ def annotate_video(
                 return
             
             if key == ord('n'):  # Skip
-                print("Skipped.")
+                logger.info("Skipped.")
                 break
             
             # Zone selection
             if key in KEY_MAP:
                 selected_zone = KEY_MAP[key]
-                print(f"Selected zone: {selected_zone}")
+                logger.info(f"Selected zone: {selected_zone}")
                 continue
             
             # Enter to confirm
             if key == 13 or key == 10:  # ENTER
                 if current_click is None:
-                    print(">> Please CLICK the mouse position first!")
+                    logger.info(">> Please CLICK the mouse position first!")
                     continue
                 if selected_zone is None:
-                    print(">> Please SELECT a zone first (press '1'-'3' or 'q'-'r')!")
+                    logger.info(">> Please SELECT a zone first (press '1'-'3' or 'q'-'r')!")
                     continue
                 
                 events.append({
@@ -155,12 +156,12 @@ def annotate_video(
                     'x': current_click[0],
                     'y': current_click[1]
                 })
-                print(f"✓ Saved: {selected_zone} at {current_click}")
+                logger.info(f"Saved: {selected_zone} at {current_click}")
                 break
     
     # Save
     df = pd.DataFrame(events)
     df.to_csv(output_csv, index=False)
-    print(f"Saved {len(events)} annotations to {output_csv}")
+    logger.info(f"Saved {len(events)} annotations to {output_csv}")
     cap.release()
     cv2.destroyAllWindows()
