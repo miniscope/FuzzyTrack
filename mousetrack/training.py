@@ -79,7 +79,7 @@ def train_cnn(
         # Training
         model.train()
         train_loss = 0
-        for imgs, _, targets_coords in train_loader:
+        for imgs, targets_coords in train_loader:
             optimizer.zero_grad()
             pred_coords = model(imgs)
             loss = criterion(pred_coords, targets_coords)
@@ -93,7 +93,7 @@ def train_cnn(
         model.eval()
         val_loss = 0
         with torch.no_grad():
-            for imgs, _, targets_coords in val_loader:
+            for imgs, targets_coords in val_loader:
                 pred_coords = model(imgs)
                 loss = criterion(pred_coords, targets_coords)
                 val_loss += loss.item()

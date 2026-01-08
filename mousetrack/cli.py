@@ -84,14 +84,12 @@ def track(video, cnn_model, lstm_model, output_video, output_csv, zone_polygons,
 @main.command()
 @click.option('--video', '-v', required=True, type=click.Path(exists=True), help='Video file')
 @click.option('--output', '-o', required=True, type=click.Path(), help='Output CSV')
-@click.option('--zone-polygons', default='config/zone_polygons.yaml', type=click.Path(), help='Zone polygons YAML')
-def annotate(video, output, zone_polygons):
-    """Annotate video frames."""
+def annotate(video, output):
+    """Annotate video frames (coordinates only)."""
     annotate_video(
         video_path=video,
         output_csv=output,
         num_samples=200,
-        zone_polygons_file=zone_polygons,
     )
 
 

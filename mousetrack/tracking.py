@@ -74,7 +74,7 @@ def track_video(
     output_csv: str = 'output/tracking_results.csv',
     zone_polygons_file: str = 'config/zone_polygons.yaml',
     zone_graph_file: str = 'config/zone_graph.yaml',
-    min_confidence: float = 0.7,
+    min_confidence: float = 0.6,
     min_frames_same: int = 5,
     enable_transition_filter: bool = True,
     enable_zone_overlay: bool = True,

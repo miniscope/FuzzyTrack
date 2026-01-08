@@ -4,7 +4,7 @@ from torch.utils.data import Dataset
 import cv2
 import pandas as pd
 import numpy as np
-from .config import LABEL_MAP, IMG_SIZE
+from .config import IMG_SIZE
 
 
 class FrameDataset(Dataset):
@@ -21,7 +21,6 @@ class FrameDataset(Dataset):
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
         frame_idx = row['frame_idx']
-        label_str = row['label']
         target_x = row['x']
         target_y = row['y']
         
@@ -59,9 +58,6 @@ class FrameDataset(Dataset):
             image = np.expand_dims(image, axis=0)  # (1, H, W)
 
         # 2. Prepare Targets
-        # Classification Target (Which Zone?) - kept for compatibility
-        label_idx = LABEL_MAP[label_str]
-        
         # Regression Target (Where is it?)
         # We predict normalized (0-1) X and Y coordinates on the screen
         if ret2 and frame_curr is not None:
@@ -76,7 +72,7 @@ class FrameDataset(Dataset):
         norm_y = target_y / h_orig
         coords = np.array([norm_x, norm_y], dtype=np.float32)
 
-        return torch.tensor(image), torch.tensor(label_idx), torch.tensor(coords)
+        return torch.tensor(image), torch.tensor(coords)
 
 
 class CoordinateSequenceDataset(Dataset):
