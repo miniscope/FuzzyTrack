@@ -1,8 +1,9 @@
 """Training functions for CNN model."""
+from typing import List, Union
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, random_split, ConcatDataset
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import cv2
@@ -15,8 +16,8 @@ from . import logger
 
 
 def train_cnn(
-    video_path: str,
-    annotations_path: str,
+    video_paths: Union[str, List[str]],
+    annotations_paths: Union[str, List[str]],
     output_path: str,
     batch_size: int,
     max_epochs: int,
@@ -28,10 +29,10 @@ def train_cnn(
 ):
     """
     Train CNN model for coordinate prediction.
-    
+
     Args:
-        video_path: Path to input video file
-        annotations_path: Path to annotations CSV file
+        video_paths: Path(s) to input video file(s)
+        annotations_paths: Path(s) to annotations CSV file(s) - must match video_paths
         output_path: Path to save trained model
         batch_size: Batch size for training
         max_epochs: Maximum number of epochs
@@ -41,15 +42,41 @@ def train_cnn(
         logdir: TensorBoard log directory
         use_heatmap: If True, use heatmap regression instead of direct coordinates
     """
-    # Load dataset
-    full_dataset = FrameDataset(video_path, annotations_path, use_heatmap=use_heatmap)
+    # Normalize to lists
+    if isinstance(video_paths, str):
+        video_paths = [video_paths]
+    if isinstance(annotations_paths, str):
+        annotations_paths = [annotations_paths]
+
+    if len(video_paths) != len(annotations_paths):
+        raise ValueError(f"Number of videos ({len(video_paths)}) must match annotations ({len(annotations_paths)})")
+
+    # Load datasets from all video/annotation pairs
+    datasets = []
+    total_samples = 0
+    for video_path, annotations_path in zip(video_paths, annotations_paths):
+        ds = FrameDataset(video_path, annotations_path, use_heatmap=use_heatmap)
+        datasets.append(ds)
+        total_samples += len(ds)
+        logger.info(f"Loaded {len(ds)} samples from {video_path}")
+
+    # Combine all datasets
+    if len(datasets) == 1:
+        full_dataset = datasets[0]
+    else:
+        full_dataset = ConcatDataset(datasets)
+
     val_size = int(len(full_dataset) * val_split)
     train_size = len(full_dataset) - val_size
     train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
-    
+
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-    
+
+    # Device setup
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info(f"Using device: {device}")
+
     # Model and optimizer
     if use_heatmap:
         model = MouseHeatmapCNN()
@@ -57,10 +84,12 @@ def train_cnn(
     else:
         model = MouseCNN()
         criterion = nn.MSELoss()
+
+    model = model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    
-    # Get video dimensions
-    cap = cv2.VideoCapture(video_path)
+
+    # Get video dimensions from first video
+    cap = cv2.VideoCapture(video_paths[0])
     ret, sample_frame = cap.read()
     if ret:
         video_height, video_width = sample_frame.shape[:2]
@@ -86,20 +115,22 @@ def train_cnn(
         model.train()
         train_loss = 0
         for imgs, targets in train_loader:
+            imgs, targets = imgs.to(device), targets.to(device)
             optimizer.zero_grad()
             pred = model(imgs)
             loss = criterion(pred, targets)
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
-        
+
         avg_train_loss = train_loss / len(train_loader)
-        
+
         # Validation
         model.eval()
         val_loss = 0
         with torch.no_grad():
             for imgs, targets in val_loader:
+                imgs, targets = imgs.to(device), targets.to(device)
                 pred = model(imgs)
                 loss = criterion(pred, targets)
                 val_loss += loss.item()

@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from .models import MouseCNN, MouseHeatmapCNN
 from .config import IMG_SIZE, HEATMAP_SIZE
-from .geometry import load_zone_geometry, get_zone_probabilities, closest_point_on_polyline
+from .geometry import load_zone_geometry, get_zone_probabilities, closest_point_on_polyline, position_along_polyline
 from . import logger
 
 
@@ -125,7 +125,8 @@ def track_video(
     use_heatmap: bool = True,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
+    logger.info(f"Using device: {device}")
+
     # Load CNN model
     if use_heatmap:
         cnn = MouseHeatmapCNN()
@@ -219,11 +220,12 @@ def track_video(
             model_out = cnn(input_tensor)
         
         # Extract coordinates from model output
+        heatmap_conf = None  # Only set for heatmap models
         if use_heatmap:
             # Model outputs heatmap, extract coordinates using weighted average for stability
             heatmap = model_out[0, 0].cpu().numpy()  # (H, W)
             raw_coords, heatmap_conf = extract_coords_from_heatmap(heatmap, use_weighted_avg=True)
-            
+
             if frame_idx < warmup_frames:
                 if heatmap_conf >= heatmap_min_confidence:
                     warmup_coords.append(raw_coords.copy())
@@ -337,16 +339,27 @@ def track_video(
                 frames_in_current_zone += 1
         
         pred_label = current_zone if current_zone else "Unknown"
-        
+
         pixel_x = int(norm_x * width)
         pixel_y = int(norm_y * height)
+
+        # Calculate tube position if in a tube
+        tube_position = None
+        if pred_label.startswith('Tube_') and pred_label in zone_polygons:
+            tube_position = position_along_polyline((pixel_x, pixel_y), zone_polygons[pred_label])
+
+        # Get likelihood/confidence for this frame
+        # Use zone confidence if available, otherwise heatmap confidence (None for non-heatmap models)
+        likelihood = pred_confidence if pred_confidence > 0 else heatmap_conf
+
         result_row = {
-            'frame': frame_idx,
-            'zone': pred_label,
             'x': pixel_x,
-            'y': pixel_y
+            'y': pixel_y,
+            'likelihood': likelihood,
+            'zone': pred_label,
+            'tube_position': tube_position,
         }
-        
+
         results.append(result_row)
         
         if pred_label in zone_polygons:
@@ -380,9 +393,20 @@ def track_video(
     cap.release()
     out_video.release()
     
-    # Save CSV
-    df = pd.DataFrame(results)
-    df.to_csv(output_csv, index=False)
+    # Save CSV in DLC format with multi-level header
+    # Format: scorer, bodyparts, coords as first 3 rows, then data
+    scorer = "3DMazeTrack"
+    bodypart = "LED"
+    columns = ['x', 'y', 'likelihood', 'zone', 'tube_position']
+
+    # Create multi-index columns
+    header_tuples = [(scorer, bodypart, col) for col in columns]
+    multi_index = pd.MultiIndex.from_tuples(header_tuples, names=['scorer', 'bodyparts', 'coords'])
+
+    df = pd.DataFrame(results, columns=columns)
+    df.columns = multi_index
+
+    df.to_csv(output_csv)
     logger.info("Tracking complete!")
     logger.info(f"  - Video saved to: {output_video}")
     logger.info(f"  - CSV saved to: {output_csv}")

@@ -14,9 +14,9 @@ def main():
 
 
 @main.command()
-@click.option('--video', '-v', required=True, type=click.Path(exists=True), help='Video file')
-@click.option('--annotations', '-a', required=True, type=click.Path(exists=True), help='Annotations CSV')
-@click.option('--output', '-o', default='models/mouse_cnn.pth', type=click.Path(), help='Output model')
+@click.option('--video', '-v', required=True, multiple=True, type=click.Path(exists=True), help='Video file(s) - can specify multiple')
+@click.option('--annotations', '-a', required=True, multiple=True, type=click.Path(exists=True), help='Annotations CSV(s) - must match videos')
+@click.option('--output', '-o', default=None, type=click.Path(), help='Output model (default: models/mouse_cnn_heatmap.pth or models/mouse_cnn_regression.pth)')
 @click.option('--no-heatmap', is_flag=True, default=False, help='Use direct coordinate regression instead of heatmap')
 @click.option('--batch-size', default=16, type=int, help='Batch size')
 @click.option('--epochs', default=200, type=int, help='Maximum number of training epochs')
@@ -25,25 +25,34 @@ def main():
 @click.option('--val-split', default=0.2, type=float, help='Validation split ratio')
 def train_cnn(video, annotations, output, no_heatmap, batch_size, epochs, patience, learning_rate, val_split):
     """Train CNN model."""
+    if len(video) != len(annotations):
+        raise click.BadParameter(f"Number of videos ({len(video)}) must match number of annotations ({len(annotations)})")
+
+    use_heatmap = not no_heatmap
+    if output is None:
+        output = 'models/mouse_cnn_heatmap.pth' if use_heatmap else 'models/mouse_cnn_regression.pth'
+
+    logdir = 'runs/mouse_tracker_heatmap' if use_heatmap else 'runs/mouse_tracker_regression'
+
     train_cnn_func(
-        video_path=video,
-        annotations_path=annotations,
+        video_paths=list(video),
+        annotations_paths=list(annotations),
         output_path=output,
-        use_heatmap=not no_heatmap,
+        use_heatmap=use_heatmap,
         batch_size=batch_size,
         max_epochs=epochs,
         patience=patience,
         val_split=val_split,
         learning_rate=learning_rate,
-        logdir="runs/mouse_tracker",
+        logdir=logdir,
     )
 
 
 @main.command()
 @click.option('--video', '-v', required=True, type=click.Path(exists=True), help='Video file')
-@click.option('--cnn-model', '-c', required=True, type=click.Path(exists=True), help='CNN model')
-@click.option('--output-video', '-o', default='output/tracking_results.mp4', type=click.Path(), help='Output video')
-@click.option('--output-csv', default='output/tracking_results.csv', type=click.Path(), help='Output CSV')
+@click.option('--cnn-model', '-c', default=None, type=click.Path(exists=True), help='CNN model (default: models/mouse_cnn_heatmap.pth or models/mouse_cnn_regression.pth)')
+@click.option('--output-video', '-o', default=None, type=click.Path(), help='Output video (default: output/tracking_heatmap.mp4 or output/tracking_regression.mp4)')
+@click.option('--output-csv', default=None, type=click.Path(), help='Output CSV (default: output/tracking_heatmap.csv or output/tracking_regression.csv)')
 @click.option('--zone-polygons', default='config/zone_polygons.yaml', type=click.Path(), help='Zone polygons YAML')
 @click.option('--zone-graph', default='config/zone_graph.yaml', type=click.Path(), help='Zone graph YAML')
 @click.option('--max-speed', type=float, help='Max movement speed (normalized 0-1 per frame)')
@@ -53,6 +62,16 @@ def train_cnn(video, annotations, output, no_heatmap, batch_size, epochs, patien
 @click.option('--no-heatmap', is_flag=True, default=False, help='Use direct coordinate regression instead of heatmap')
 def track(video, cnn_model, output_video, output_csv, zone_polygons, zone_graph, max_speed, min_confidence, min_confidence_forbidden, min_frames_same, no_heatmap):
     """Run tracking."""
+    use_heatmap = not no_heatmap
+    model_type = 'heatmap' if use_heatmap else 'regression'
+
+    if cnn_model is None:
+        cnn_model = f'models/mouse_cnn_{model_type}.pth'
+    if output_video is None:
+        output_video = f'output/tracking_{model_type}.mp4'
+    if output_csv is None:
+        output_csv = f'output/tracking_{model_type}.csv'
+
     track_video(
         video_path=video,
         cnn_model_path=cnn_model,
@@ -64,7 +83,7 @@ def track(video, cnn_model, output_video, output_csv, zone_polygons, zone_graph,
         min_confidence_forbidden=min_confidence_forbidden,
         min_frames_same=min_frames_same,
         max_speed=max_speed,
-        use_heatmap=not no_heatmap,
+        use_heatmap=use_heatmap,
     )
 
 

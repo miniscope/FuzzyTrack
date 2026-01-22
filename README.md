@@ -14,7 +14,7 @@ uv sync
 ```bash
 mousetrack define-zones --video assets/video.mp4
 ```
-Creates `config/zone_polygons.yaml` with zone boundaries.
+**Generates:** `config/zone_polygons.yaml` (zone boundaries)
 
 **Note**: You also need `config/zone_graph.yaml` with zone connections. Create it manually or copy from an example.
 
@@ -24,19 +24,43 @@ mousetrack annotate --video assets/video.mp4 --output assets/annotations.csv
 ```
 Click mouse positions and select zones for training data.
 
+**Generates:** `assets/annotations.csv` (training annotations)
+
 ### 3. Train CNN (coordinate prediction)
 ```bash
-mousetrack train-cnn --video assets/video.mp4 --annotations assets/annotations.csv --output models/mouse_cnn.pth
+# Single video (heatmap mode - default)
+mousetrack train-cnn --video assets/video.mp4 --annotations assets/annotations.csv
+
+# Multiple videos
+mousetrack train-cnn \
+  -v assets/video1.mp4 -a assets/annotations1.csv \
+  -v assets/video2.mp4 -a assets/annotations2.csv
+
+# Regression mode (instead of heatmap)
+mousetrack train-cnn --video assets/video.mp4 --annotations assets/annotations.csv --no-heatmap
 ```
+**Generates:**
+- `models/mouse_cnn_heatmap.pth` or `models/mouse_cnn_regression.pth` (trained model)
+- `runs/mouse_tracker_heatmap/` or `runs/mouse_tracker_regression/` (TensorBoard logs)
 
 ### 4. Run Tracking
 ```bash
+# Heatmap mode (default)
+mousetrack track --video assets/video.mp4
+
+# Regression mode
+mousetrack track --video assets/video.mp4 --no-heatmap
+
+# Custom paths
 mousetrack track \
   --video assets/video.mp4 \
-  --cnn-model models/mouse_cnn.pth \
-  --output-csv output/tracking_results.csv \
-  --output-video output/tracking_results.mp4
+  --cnn-model models/mouse_cnn_heatmap.pth \
+  --output-csv output/tracking_heatmap.csv \
+  --output-video output/tracking_heatmap.mp4
 ```
+**Generates:**
+- `output/tracking_heatmap.csv` or `output/tracking_regression.csv` (tracking data in DLC format)
+- `output/tracking_heatmap.mp4` or `output/tracking_regression.mp4` (annotated video)
 
 ## Pipeline Summary
 
