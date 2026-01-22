@@ -1,4 +1,5 @@
 """Training functions for CNN model."""
+import os
 from typing import List, Union
 import torch
 import torch.nn as nn
@@ -166,7 +167,12 @@ def train_cnn(
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
         logger.info(f"Restored best model (val_loss: {best_val_loss:.4f})")
-    
+
+    # Create output directory if needed
+    output_dir = os.path.dirname(output_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
     torch.save(model.state_dict(), output_path)
     writer.close()
     logger.info(f"Model saved to {output_path}")
