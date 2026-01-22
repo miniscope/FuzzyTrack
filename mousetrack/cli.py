@@ -62,8 +62,9 @@ def train_cnn(video, annotations, output, no_heatmap, batch_size, epochs, patien
 @click.option('--min-confidence', default=0.5, type=float, help='Min confidence for valid transitions (tube-room, room-tube)')
 @click.option('--min-confidence-forbidden', default=0.8, type=float, help='Min confidence for forbidden transitions (tube-tube, room-room)')
 @click.option('--min-frames-same', default=1, type=int, help='Min frames in same zone before switching')
+@click.option('--smoothing', default=0.5, type=float, help='EMA smoothing factor for coordinates (0.0-1.0, lower=smoother, 1.0=no smoothing)')
 @click.option('--no-heatmap', is_flag=True, default=False, help='Use direct coordinate regression instead of heatmap')
-def track(video, cnn_model, output_video, output_csv, zone_polygons, zone_graph, max_speed, min_confidence, min_confidence_forbidden, min_frames_same, no_heatmap):
+def track(video, cnn_model, output_video, output_csv, zone_polygons, zone_graph, max_speed, min_confidence, min_confidence_forbidden, min_frames_same, smoothing, no_heatmap):
     """Run tracking."""
     use_heatmap = not no_heatmap
     model_type = 'heatmap' if use_heatmap else 'regression'
@@ -87,6 +88,7 @@ def track(video, cnn_model, output_video, output_csv, zone_polygons, zone_graph,
         min_confidence_forbidden=min_confidence_forbidden,
         min_frames_same=min_frames_same,
         max_speed=max_speed,
+        smoothing=smoothing,
         use_heatmap=use_heatmap,
     )
 

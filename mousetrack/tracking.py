@@ -122,10 +122,12 @@ def track_video(
     min_confidence_forbidden: float,
     min_frames_same: int,
     max_speed: Optional[float],
+    smoothing: float = 0.5,
     use_heatmap: bool = True,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
+    logger.info(f"Smoothing factor: {smoothing}" + (" (no smoothing)" if smoothing >= 1.0 else ""))
 
     # Load CNN model
     if use_heatmap:
@@ -252,9 +254,13 @@ def track_video(
                 # Scale down movement to max_speed
                 movement = movement * (max_speed / movement_norm)
                 raw_coords = prev_refined_coords + movement
-        
+
+        # Apply EMA smoothing to coordinates
+        if prev_refined_coords is not None and smoothing < 1.0:
+            raw_coords = smoothing * raw_coords + (1.0 - smoothing) * prev_refined_coords
+
         raw_coords = np.clip(raw_coords, 0.0, 1.0)
-        
+
         # Update previous refined coordinates for next iteration
         prev_refined_coords = raw_coords.copy()
         

@@ -51,6 +51,9 @@ mousetrack track --video assets/video.mp4
 # Regression mode
 mousetrack track --video assets/video.mp4 --no-heatmap
 
+# Adjust smoothing (default 0.5, lower=smoother, 1.0=no smoothing)
+mousetrack track --video assets/video.mp4 --smoothing 0.3
+
 # Custom paths
 mousetrack track \
   --video assets/video.mp4 \
@@ -65,9 +68,10 @@ mousetrack track \
 ## Pipeline Summary
 
 ```
-Video → CNN → Geometric Classification → Zones
+Video → CNN → EMA Smoothing → Geometric Classification → Zones
 ```
 
 - **CNN**: Finds mouse coordinates from frames (supports direct regression or heatmap)
+- **EMA Smoothing**: Exponential moving average reduces jitter from noise/scattering
 - **Geometric Classification**: Classifies zones using proximity to polygons/polylines
 - **Hysteresis**: Prevents rapid zone switching for stability
