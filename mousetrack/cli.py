@@ -1,4 +1,5 @@
 """Command-line interface for mouse tracking."""
+from datetime import datetime
 import click
 
 from .training import train_cnn as train_cnn_func
@@ -32,7 +33,9 @@ def train_cnn(video, annotations, output, no_heatmap, batch_size, epochs, patien
     if output is None:
         output = 'models/mouse_cnn_heatmap.pth' if use_heatmap else 'models/mouse_cnn_regression.pth'
 
-    logdir = 'runs/mouse_tracker_heatmap' if use_heatmap else 'runs/mouse_tracker_regression'
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    model_type = 'heatmap' if use_heatmap else 'regression'
+    logdir = f'runs/mouse_tracker_{model_type}_{timestamp}'
 
     train_cnn_func(
         video_paths=list(video),

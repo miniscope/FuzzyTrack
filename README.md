@@ -41,7 +41,7 @@ mousetrack train-cnn --video assets/video.mp4 --annotations assets/annotations.c
 ```
 **Generates:**
 - `models/mouse_cnn_heatmap.pth` or `models/mouse_cnn_regression.pth` (trained model)
-- `runs/mouse_tracker_heatmap/` or `runs/mouse_tracker_regression/` (TensorBoard logs)
+- `runs/mouse_tracker_{heatmap|regression}_{timestamp}/` (TensorBoard logs)
 
 ### 4. Run Tracking
 ```bash
