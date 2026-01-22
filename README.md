@@ -59,8 +59,8 @@ mousetrack track \
   --output-video output/tracking_heatmap.mp4
 ```
 **Generates:**
-- `output/tracking_heatmap.csv` or `output/tracking_regression.csv` (tracking data in DLC format)
-- `output/tracking_heatmap.mp4` or `output/tracking_regression.mp4` (annotated video)
+- `output/tracking_{heatmap|regression}_{timestamp}.csv` (tracking data in DLC format)
+- `output/tracking_{heatmap|regression}_{timestamp}.mp4` (annotated video)
 
 ## Pipeline Summary
 

@@ -67,13 +67,14 @@ def track(video, cnn_model, output_video, output_csv, zone_polygons, zone_graph,
     """Run tracking."""
     use_heatmap = not no_heatmap
     model_type = 'heatmap' if use_heatmap else 'regression'
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
     if cnn_model is None:
         cnn_model = f'models/mouse_cnn_{model_type}.pth'
     if output_video is None:
-        output_video = f'output/tracking_{model_type}.mp4'
+        output_video = f'output/tracking_{model_type}_{timestamp}.mp4'
     if output_csv is None:
-        output_csv = f'output/tracking_{model_type}.csv'
+        output_csv = f'output/tracking_{model_type}_{timestamp}.csv'
 
     track_video(
         video_path=video,

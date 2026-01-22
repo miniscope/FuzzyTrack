@@ -162,7 +162,13 @@ def track_video(
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
     logger.info(f"Input video: {width}x{height} @ {fps} fps, {total_frames} frames")
-    
+
+    # Create output directories if needed
+    for path in [output_video, output_csv]:
+        output_dir = os.path.dirname(path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
     # Create video writer
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out_video = cv2.VideoWriter(output_video, fourcc, fps, (width, height))
