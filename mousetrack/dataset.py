@@ -9,12 +9,13 @@ from .config import IMG_SIZE, HEATMAP_SIZE, HEATMAP_SIGMA
 
 class FrameDataset(Dataset):
     """Dataset for CNN training: loads frames and returns motion difference images."""
-    
-    def __init__(self, video_path, csv_path, use_heatmap=True):
+
+    def __init__(self, video_path, csv_path, use_heatmap=True, heatmap_sigma=None):
         self.video_path = video_path
         self.df = pd.read_csv(csv_path)
         self.cap = cv2.VideoCapture(video_path)  # Keep open for speed
         self.use_heatmap = use_heatmap
+        self.heatmap_sigma = heatmap_sigma if heatmap_sigma is not None else HEATMAP_SIGMA
         
     def __len__(self):
         return len(self.df)
@@ -75,7 +76,7 @@ class FrameDataset(Dataset):
 
         if self.use_heatmap:
             # Generate heatmap target
-            heatmap = self._generate_heatmap(norm_x, norm_y, HEATMAP_SIZE[0], HEATMAP_SIZE[1], HEATMAP_SIGMA)
+            heatmap = self._generate_heatmap(norm_x, norm_y, HEATMAP_SIZE[0], HEATMAP_SIZE[1], self.heatmap_sigma)
             # Add channel dimension: (H, W) -> (1, H, W) to match model output
             heatmap = np.expand_dims(heatmap, axis=0)
             return torch.tensor(image), torch.tensor(heatmap, dtype=torch.float32)

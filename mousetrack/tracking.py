@@ -173,9 +173,10 @@ def track_video(
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
 
-    # Create video writer
+    # Create video writer (side-by-side for heatmap mode)
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out_video = cv2.VideoWriter(output_video, fourcc, fps, (width, height))
+    output_width = width * 2 if use_heatmap else width
+    out_video = cv2.VideoWriter(output_video, fourcc, fps, (output_width, height))
     if not out_video.isOpened():
         logger.error(f"Error creating output video: {output_video}")
         cap.release()
@@ -393,11 +394,34 @@ def track_video(
                 cv2.circle(frame, tuple(closest_pt), 18, (0, 255, 0), -1)
         
         cv2.circle(frame, (pixel_x, pixel_y), 8, (0, 0, 255), -1)
-        
+
         cv2.putText(frame, f"Frame: {frame_idx}", (20, height - 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        
-        out_video.write(frame)
+
+        # Create output frame (side-by-side with heatmap if in heatmap mode)
+        if use_heatmap:
+            # Render heatmap as colored image (raw output for debugging)
+            heatmap_vis = (heatmap / (heatmap.max() + 1e-8) * 255).astype(np.uint8)
+
+            # Scale up with nearest neighbor to show actual grid cells
+            heatmap_vis = cv2.resize(heatmap_vis, (width, height), interpolation=cv2.INTER_NEAREST)
+
+            heatmap_colored = cv2.applyColorMap(heatmap_vis, cv2.COLORMAP_JET)
+
+            # Draw prediction marker on heatmap
+            cv2.circle(heatmap_colored, (pixel_x, pixel_y), 8, (255, 255, 255), 2)
+
+            # Add label
+            cv2.putText(heatmap_colored, "Heatmap", (20, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            cv2.putText(heatmap_colored, f"Conf: {heatmap_conf:.3f}" if heatmap_conf else "Conf: N/A",
+                        (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+            # Combine side by side
+            combined_frame = np.hstack([frame, heatmap_colored])
+            out_video.write(combined_frame)
+        else:
+            out_video.write(frame)
         
         pbar.update(1)
         prev_gray = curr_gray

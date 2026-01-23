@@ -6,6 +6,7 @@ from .training import train_cnn as train_cnn_func
 from .tracking import track_video
 from .annotation import annotate_video
 from .zones import define_zones
+from .config import load_config
 
 
 @click.group()
@@ -17,20 +18,33 @@ def main():
 @main.command()
 @click.option('--video', '-v', required=True, multiple=True, type=click.Path(exists=True), help='Video file(s) - can specify multiple')
 @click.option('--annotations', '-a', required=True, multiple=True, type=click.Path(exists=True), help='Annotations CSV(s) - must match videos')
-@click.option('--output', '-o', default=None, type=click.Path(), help='Output model (default: models/mouse_cnn_heatmap.pth or models/mouse_cnn_regression.pth)')
-@click.option('--no-heatmap', is_flag=True, default=False, help='Use direct coordinate regression instead of heatmap')
-@click.option('--batch-size', default=16, type=int, help='Batch size')
-@click.option('--epochs', default=200, type=int, help='Maximum number of training epochs')
-@click.option('--patience', default=20, type=int, help='Early stopping patience')
-@click.option('--learning-rate', '--lr', default=5e-4, type=float, help='Learning rate')
-@click.option('--val-split', default=0.2, type=float, help='Validation split ratio')
-@click.option('--backbone', default='resnet18', type=click.Choice(['resnet18', 'resnet50']), help='Backbone architecture')
-def train_cnn(video, annotations, output, no_heatmap, batch_size, epochs, patience, learning_rate, val_split, backbone):
+@click.option('--config', '-c', required=True, type=click.Path(exists=True), help='Config YAML file')
+@click.option('--output', '-o', default=None, type=click.Path(), help='Output model path')
+@click.option('--no-heatmap', is_flag=True, default=None, help='Use direct coordinate regression instead of heatmap')
+@click.option('--batch-size', default=None, type=int, help='Batch size')
+@click.option('--epochs', default=None, type=int, help='Maximum number of training epochs')
+@click.option('--patience', default=None, type=int, help='Early stopping patience')
+@click.option('--learning-rate', '--lr', default=None, type=float, help='Learning rate')
+@click.option('--val-split', default=None, type=float, help='Validation split ratio')
+@click.option('--backbone', default=None, type=click.Choice(['resnet18', 'resnet50']), help='Backbone architecture')
+@click.option('--heatmap-sigma', default=None, type=float, help='Gaussian sigma for heatmap target')
+def train_cnn(video, annotations, config, output, no_heatmap, batch_size, epochs, patience, learning_rate, val_split, backbone, heatmap_sigma):
     """Train CNN model."""
     if len(video) != len(annotations):
         raise click.BadParameter(f"Number of videos ({len(video)}) must match number of annotations ({len(annotations)})")
 
-    use_heatmap = not no_heatmap
+    # Load config and apply CLI overrides
+    cfg = load_config(config)
+
+    use_heatmap = cfg['model']['use_heatmap'] if no_heatmap is None else (not no_heatmap)
+    backbone = backbone or cfg['model']['backbone']
+    batch_size = batch_size or cfg['training']['batch_size']
+    epochs = epochs or cfg['training']['epochs']
+    patience = patience or cfg['training']['patience']
+    learning_rate = learning_rate or cfg['training']['learning_rate']
+    val_split = val_split or cfg['training']['val_split']
+    heatmap_sigma = heatmap_sigma or cfg['heatmap']['sigma']
+
     if output is None:
         output = 'models/mouse_cnn_heatmap.pth' if use_heatmap else 'models/mouse_cnn_regression.pth'
 
@@ -50,26 +64,38 @@ def train_cnn(video, annotations, output, no_heatmap, batch_size, epochs, patien
         learning_rate=learning_rate,
         logdir=logdir,
         backbone=backbone,
+        heatmap_sigma=heatmap_sigma,
     )
 
 
 @main.command()
 @click.option('--video', '-v', required=True, type=click.Path(exists=True), help='Video file')
-@click.option('--cnn-model', '-c', default=None, type=click.Path(exists=True), help='CNN model (default: models/mouse_cnn_heatmap.pth or models/mouse_cnn_regression.pth)')
-@click.option('--output-video', '-o', default=None, type=click.Path(), help='Output video (default: output/tracking_heatmap.mp4 or output/tracking_regression.mp4)')
-@click.option('--output-csv', default=None, type=click.Path(), help='Output CSV (default: output/tracking_heatmap.csv or output/tracking_regression.csv)')
+@click.option('--config', '-c', required=True, type=click.Path(exists=True), help='Config YAML file')
+@click.option('--cnn-model', '-m', default=None, type=click.Path(exists=True), help='CNN model path')
+@click.option('--output-video', '-o', default=None, type=click.Path(), help='Output video path')
+@click.option('--output-csv', default=None, type=click.Path(), help='Output CSV path')
 @click.option('--zone-polygons', default='config/zone_polygons.yaml', type=click.Path(), help='Zone polygons YAML')
 @click.option('--zone-graph', default='config/zone_graph.yaml', type=click.Path(), help='Zone graph YAML')
-@click.option('--max-speed', type=float, help='Max movement speed (normalized 0-1 per frame)')
-@click.option('--min-confidence', default=0.5, type=float, help='Min confidence for valid transitions (tube-room, room-tube)')
-@click.option('--min-confidence-forbidden', default=0.8, type=float, help='Min confidence for forbidden transitions (tube-tube, room-room)')
-@click.option('--min-frames-same', default=1, type=int, help='Min frames in same zone before switching')
-@click.option('--smoothing', default=0.5, type=float, help='EMA smoothing factor for coordinates (0.0-1.0, lower=smoother, 1.0=no smoothing)')
-@click.option('--backbone', default='resnet18', type=click.Choice(['resnet18', 'resnet50']), help='Backbone architecture (must match training)')
-@click.option('--no-heatmap', is_flag=True, default=False, help='Use direct coordinate regression instead of heatmap')
-def track(video, cnn_model, output_video, output_csv, zone_polygons, zone_graph, max_speed, min_confidence, min_confidence_forbidden, min_frames_same, smoothing, backbone, no_heatmap):
+@click.option('--max-speed', default=None, type=float, help='Max movement speed (normalized 0-1 per frame)')
+@click.option('--min-confidence', default=None, type=float, help='Min confidence for valid transitions')
+@click.option('--min-confidence-forbidden', default=None, type=float, help='Min confidence for forbidden transitions')
+@click.option('--min-frames-same', default=None, type=int, help='Min frames in same zone before switching')
+@click.option('--smoothing', default=None, type=float, help='EMA smoothing factor (0.0-1.0, lower=smoother)')
+@click.option('--backbone', default=None, type=click.Choice(['resnet18', 'resnet50']), help='Backbone architecture (must match training)')
+@click.option('--no-heatmap', is_flag=True, default=None, help='Use direct coordinate regression instead of heatmap')
+def track(video, config, cnn_model, output_video, output_csv, zone_polygons, zone_graph, max_speed, min_confidence, min_confidence_forbidden, min_frames_same, smoothing, backbone, no_heatmap):
     """Run tracking."""
-    use_heatmap = not no_heatmap
+    # Load config and apply CLI overrides
+    cfg = load_config(config)
+
+    use_heatmap = cfg['model']['use_heatmap'] if no_heatmap is None else (not no_heatmap)
+    backbone = backbone or cfg['model']['backbone']
+    smoothing = smoothing if smoothing is not None else cfg['tracking']['smoothing']
+    min_confidence = min_confidence if min_confidence is not None else cfg['tracking']['min_confidence']
+    min_confidence_forbidden = min_confidence_forbidden if min_confidence_forbidden is not None else cfg['tracking']['min_confidence_forbidden']
+    min_frames_same = min_frames_same if min_frames_same is not None else cfg['tracking']['min_frames_same']
+    max_speed = max_speed if max_speed is not None else cfg['tracking']['max_speed']
+
     model_type = 'heatmap' if use_heatmap else 'regression'
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 

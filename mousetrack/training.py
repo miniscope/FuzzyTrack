@@ -28,6 +28,7 @@ def train_cnn(
     logdir: str,
     use_heatmap: bool,
     backbone: str = 'resnet18',
+    heatmap_sigma: float = None,
 ):
     """
     Train CNN model for coordinate prediction.
@@ -43,6 +44,7 @@ def train_cnn(
         learning_rate: Learning rate
         logdir: TensorBoard log directory
         use_heatmap: If True, use heatmap regression instead of direct coordinates
+        heatmap_sigma: Gaussian sigma for heatmap target generation
     """
     # Normalize to lists
     if isinstance(video_paths, str):
@@ -57,7 +59,7 @@ def train_cnn(
     datasets = []
     total_samples = 0
     for video_path, annotations_path in zip(video_paths, annotations_paths):
-        ds = FrameDataset(video_path, annotations_path, use_heatmap=use_heatmap)
+        ds = FrameDataset(video_path, annotations_path, use_heatmap=use_heatmap, heatmap_sigma=heatmap_sigma)
         datasets.append(ds)
         total_samples += len(ds)
         logger.info(f"Loaded {len(ds)} samples from {video_path}")
@@ -79,6 +81,8 @@ def train_cnn(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
     logger.info(f"Backbone: {backbone}")
+    if use_heatmap and heatmap_sigma is not None:
+        logger.info(f"Heatmap sigma: {heatmap_sigma}")
 
     # Model and optimizer
     if use_heatmap:
