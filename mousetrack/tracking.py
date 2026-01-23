@@ -123,18 +123,20 @@ def track_video(
     min_frames_same: int,
     max_speed: Optional[float],
     smoothing: float = 0.5,
+    backbone: str = 'resnet18',
     use_heatmap: bool = True,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
+    logger.info(f"Backbone: {backbone}")
     logger.info(f"Smoothing factor: {smoothing}" + (" (no smoothing)" if smoothing >= 1.0 else ""))
 
     # Load CNN model
     if use_heatmap:
-        cnn = MouseHeatmapCNN()
+        cnn = MouseHeatmapCNN(backbone=backbone)
         logger.info("Loading heatmap CNN model...")
     else:
-        cnn = MouseCNN()
+        cnn = MouseCNN(backbone=backbone)
         logger.info("Loading coordinate CNN model...")
     
     cnn.load_state_dict(torch.load(cnn_model_path, map_location=device))

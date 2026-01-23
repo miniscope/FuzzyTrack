@@ -24,7 +24,8 @@ def main():
 @click.option('--patience', default=20, type=int, help='Early stopping patience')
 @click.option('--learning-rate', '--lr', default=5e-4, type=float, help='Learning rate')
 @click.option('--val-split', default=0.2, type=float, help='Validation split ratio')
-def train_cnn(video, annotations, output, no_heatmap, batch_size, epochs, patience, learning_rate, val_split):
+@click.option('--backbone', default='resnet18', type=click.Choice(['resnet18', 'resnet50']), help='Backbone architecture')
+def train_cnn(video, annotations, output, no_heatmap, batch_size, epochs, patience, learning_rate, val_split, backbone):
     """Train CNN model."""
     if len(video) != len(annotations):
         raise click.BadParameter(f"Number of videos ({len(video)}) must match number of annotations ({len(annotations)})")
@@ -48,6 +49,7 @@ def train_cnn(video, annotations, output, no_heatmap, batch_size, epochs, patien
         val_split=val_split,
         learning_rate=learning_rate,
         logdir=logdir,
+        backbone=backbone,
     )
 
 
@@ -63,8 +65,9 @@ def train_cnn(video, annotations, output, no_heatmap, batch_size, epochs, patien
 @click.option('--min-confidence-forbidden', default=0.8, type=float, help='Min confidence for forbidden transitions (tube-tube, room-room)')
 @click.option('--min-frames-same', default=1, type=int, help='Min frames in same zone before switching')
 @click.option('--smoothing', default=0.5, type=float, help='EMA smoothing factor for coordinates (0.0-1.0, lower=smoother, 1.0=no smoothing)')
+@click.option('--backbone', default='resnet18', type=click.Choice(['resnet18', 'resnet50']), help='Backbone architecture (must match training)')
 @click.option('--no-heatmap', is_flag=True, default=False, help='Use direct coordinate regression instead of heatmap')
-def track(video, cnn_model, output_video, output_csv, zone_polygons, zone_graph, max_speed, min_confidence, min_confidence_forbidden, min_frames_same, smoothing, no_heatmap):
+def track(video, cnn_model, output_video, output_csv, zone_polygons, zone_graph, max_speed, min_confidence, min_confidence_forbidden, min_frames_same, smoothing, backbone, no_heatmap):
     """Run tracking."""
     use_heatmap = not no_heatmap
     model_type = 'heatmap' if use_heatmap else 'regression'
@@ -89,6 +92,7 @@ def track(video, cnn_model, output_video, output_csv, zone_polygons, zone_graph,
         min_frames_same=min_frames_same,
         max_speed=max_speed,
         smoothing=smoothing,
+        backbone=backbone,
         use_heatmap=use_heatmap,
     )
 

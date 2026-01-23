@@ -27,6 +27,7 @@ def train_cnn(
     learning_rate: float,
     logdir: str,
     use_heatmap: bool,
+    backbone: str = 'resnet18',
 ):
     """
     Train CNN model for coordinate prediction.
@@ -77,13 +78,14 @@ def train_cnn(
     # Device setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
+    logger.info(f"Backbone: {backbone}")
 
     # Model and optimizer
     if use_heatmap:
-        model = MouseHeatmapCNN()
+        model = MouseHeatmapCNN(backbone=backbone)
         criterion = nn.MSELoss()  # MSE loss on heatmaps
     else:
-        model = MouseCNN()
+        model = MouseCNN(backbone=backbone)
         criterion = nn.MSELoss()
 
     model = model.to(device)

@@ -38,6 +38,9 @@ mousetrack train-cnn \
 
 # Regression mode (instead of heatmap)
 mousetrack train-cnn --video assets/video.mp4 --annotations assets/annotations.csv --no-heatmap
+
+# Use ResNet50 backbone (more capacity, better for complex patterns)
+mousetrack train-cnn --video assets/video.mp4 --annotations assets/annotations.csv --backbone resnet50
 ```
 **Generates:**
 - `models/mouse_cnn_heatmap.pth` or `models/mouse_cnn_regression.pth` (trained model)
@@ -53,6 +56,9 @@ mousetrack track --video assets/video.mp4 --no-heatmap
 
 # Adjust smoothing (default 0.5, lower=smoother, 1.0=no smoothing)
 mousetrack track --video assets/video.mp4 --smoothing 0.3
+
+# Use ResNet50 backbone (must match training)
+mousetrack track --video assets/video.mp4 --backbone resnet50
 
 # Custom paths
 mousetrack track \
