@@ -3,7 +3,7 @@ model:
   use_heatmap: true   # true for heatmap mode, false for regression
 
 heatmap:
-  sigma: 5.0  # Gaussian sigma for target heatmap
+  sigma: 2.0  # Gaussian sigma for target heatmap
 
 training:
   batch_size: 64
