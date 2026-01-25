@@ -6,11 +6,13 @@ heatmap:
   sigma: 5.0  # Gaussian sigma for target heatmap
 
 training:
-  batch_size: 16
+  batch_size: 64
   epochs: 200
   patience: 20
   learning_rate: 0.0005
   val_split: 0.2
+  num_workers: 4
+  pin_memory: true
 
 tracking:
   smoothing: 0.5          # EMA smoothing (0.0-1.0, lower=smoother, 1.0=no smoothing)

@@ -29,6 +29,8 @@ def train_cnn(
     use_heatmap: bool,
     backbone: str = 'resnet18',
     heatmap_sigma: float = None,
+    num_workers: int = 4,
+    pin_memory: bool = True,
 ):
     """
     Train CNN model for coordinate prediction.
@@ -74,8 +76,25 @@ def train_cnn(
     train_size = len(full_dataset) - val_size
     train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=(num_workers > 0),
+        prefetch_factor=4 if num_workers > 0 else None,
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=(num_workers > 0),
+        prefetch_factor=4 if num_workers > 0 else None,
+    )
 
     # Device setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -122,7 +141,7 @@ def train_cnn(
         model.train()
         train_loss = 0
         for imgs, targets in train_loader:
-            imgs, targets = imgs.to(device), targets.to(device)
+            imgs, targets = imgs.to(device, non_blocking=True), targets.to(device, non_blocking=True)
             optimizer.zero_grad()
             pred = model(imgs)
             loss = criterion(pred, targets)
