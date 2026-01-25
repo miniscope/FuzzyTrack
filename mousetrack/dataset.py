@@ -13,9 +13,15 @@ class FrameDataset(Dataset):
     def __init__(self, video_path, csv_path, use_heatmap=True, heatmap_sigma=None):
         self.video_path = video_path
         self.df = pd.read_csv(csv_path)
-        self.cap = cv2.VideoCapture(video_path)  # Keep open for speed
+        self.cap = None  # Opened lazily per worker (cv2.VideoCapture is not fork-safe)
         self.use_heatmap = use_heatmap
         self.heatmap_sigma = heatmap_sigma if heatmap_sigma is not None else HEATMAP_SIGMA
+
+    def _get_cap(self):
+        """Get VideoCapture, opening it if needed (fork-safe)."""
+        if self.cap is None:
+            self.cap = cv2.VideoCapture(self.video_path)
+        return self.cap
         
     def __len__(self):
         return len(self.df)
@@ -27,18 +33,19 @@ class FrameDataset(Dataset):
         target_y = row['y']
         
         # 1. Load Current Frame and Previous Frame (for motion)
+        cap = self._get_cap()
         # Handle edge case: frame_idx 0 has no previous frame
         if frame_idx == 0:
             # For first frame, use current frame as both prev and curr (no motion = all zeros diff)
-            self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            ret1, frame_prev = self.cap.read()
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ret1, frame_prev = cap.read()
             # Use same frame for curr (no previous frame exists)
             frame_curr = frame_prev.copy() if ret1 else None
             ret2 = ret1
         else:
-            self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx - 1)
-            ret1, frame_prev = self.cap.read()
-            ret2, frame_curr = self.cap.read()
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx - 1)
+            ret1, frame_prev = cap.read()
+            ret2, frame_curr = cap.read()
         
         if not ret1 or not ret2:
             # Fallback if read fails (edge cases)
