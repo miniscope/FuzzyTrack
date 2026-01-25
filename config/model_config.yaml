@@ -13,6 +13,7 @@ training:
   val_split: 0.2
   num_workers: 4
   pin_memory: true
+  cache_frames: true  # Preload frames to RAM (faster, uses ~2GB for 900 samples)
 
 tracking:
   smoothing: 0.5          # EMA smoothing (0.0-1.0, lower=smoother, 1.0=no smoothing)

@@ -31,6 +31,7 @@ def train_cnn(
     heatmap_sigma: float = None,
     num_workers: int = 4,
     pin_memory: bool = True,
+    cache_frames: bool = True,
 ):
     """
     Train CNN model for coordinate prediction.
@@ -61,7 +62,7 @@ def train_cnn(
     datasets = []
     total_samples = 0
     for video_path, annotations_path in zip(video_paths, annotations_paths):
-        ds = FrameDataset(video_path, annotations_path, use_heatmap=use_heatmap, heatmap_sigma=heatmap_sigma)
+        ds = FrameDataset(video_path, annotations_path, use_heatmap=use_heatmap, heatmap_sigma=heatmap_sigma, cache_frames=cache_frames)
         datasets.append(ds)
         total_samples += len(ds)
         logger.info(f"Loaded {len(ds)} samples from {video_path}")

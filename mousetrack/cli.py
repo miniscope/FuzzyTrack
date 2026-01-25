@@ -46,6 +46,7 @@ def train_cnn(video, annotations, config, output, no_heatmap, batch_size, epochs
     heatmap_sigma = heatmap_sigma or cfg['heatmap']['sigma']
     num_workers = cfg['training'].get('num_workers', 4)
     pin_memory = cfg['training'].get('pin_memory', True)
+    cache_frames = cfg['training'].get('cache_frames', True)
 
     if output is None:
         output = 'models/mouse_cnn_heatmap.pth' if use_heatmap else 'models/mouse_cnn_regression.pth'
@@ -69,6 +70,7 @@ def train_cnn(video, annotations, config, output, no_heatmap, batch_size, epochs
         heatmap_sigma=heatmap_sigma,
         num_workers=num_workers,
         pin_memory=pin_memory,
+        cache_frames=cache_frames,
     )
 
 
