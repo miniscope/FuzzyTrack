@@ -115,18 +115,20 @@ class FrameDataset(Dataset):
     
     def _generate_heatmap(self, x, y, h, w, sigma):
         """Generate Gaussian heatmap from normalized coordinates."""
-        heatmap = np.zeros((h, w), dtype=np.float32)
-        
         # Convert normalized coordinates to heatmap coordinates
-        hm_x = int(x * w)
-        hm_y = int(y * h)
-        
+        # Use (w-1) and (h-1) to match extraction formula
+        hm_x = x * (w - 1)
+        hm_y = y * (h - 1)
+
         # Clamp to valid range
         hm_x = np.clip(hm_x, 0, w - 1)
         hm_y = np.clip(hm_y, 0, h - 1)
-        
+
         # Generate Gaussian
         y_coords, x_coords = np.ogrid[:h, :w]
         heatmap = np.exp(-((x_coords - hm_x)**2 + (y_coords - hm_y)**2) / (2 * sigma**2))
-        
-        return heatmap
+
+        # Normalize to sum to 1 (match model's softmax output)
+        heatmap = heatmap / (heatmap.sum() + 1e-8)
+
+        return heatmap.astype(np.float32)
