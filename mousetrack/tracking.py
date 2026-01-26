@@ -125,6 +125,7 @@ def track_video(
     smoothing: float = 0.5,
     backbone: str = 'resnet18',
     use_heatmap: bool = True,
+    heatmap_min_confidence: float = 0.05,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
@@ -204,7 +205,7 @@ def track_video(
     warmup_frames = 30 if use_heatmap else 5  # Much longer warm-up for heatmap
     warmup_zone_candidates = {}  # Track zone candidates during warm-up
     warmup_coords = []  # Track coordinates during warm-up for smoothing
-    heatmap_min_confidence = 0.3  # Minimum heatmap confidence to accept prediction (higher = more strict)
+    # heatmap_min_confidence is passed as parameter
     min_warmup_confident_frames = 10 if use_heatmap else 3  # Need at least N confident predictions before starting
     
     results = []

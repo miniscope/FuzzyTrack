@@ -20,5 +20,6 @@ tracking:
   min_confidence: 0.2     # Min confidence for valid zone transitions
   min_confidence_forbidden: 0.5  # Min confidence for forbidden transitions
   min_frames_same: 1      # Min frames in zone before switching
+  heatmap_min_confidence: 0.05  # Min heatmap confidence during warmup (softmax, so typically 0.01-0.2)
   # max_speed: 0.1        # Uncomment to limit movement speed (normalized 0-1 per frame)
 　
