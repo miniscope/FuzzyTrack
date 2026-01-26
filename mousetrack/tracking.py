@@ -66,22 +66,33 @@ def is_valid_transition(current_zone: str, new_zone: str, zone_graph: Dict) -> b
 
 def extract_coords_from_heatmap(heatmap: np.ndarray, use_weighted_avg: bool = True) -> tuple[np.ndarray, float]:
     """Extract coordinates from heatmap.
-    
+
     Args:
         heatmap: Heatmap array, shape (1, H, W) or (H, W)
         use_weighted_avg: If True, use weighted average (centroid). If False, use argmax.
-    
+
     Returns:
-        Tuple of (coordinates, confidence) where confidence is the peak value or entropy-based measure
+        Tuple of (coordinates, confidence) where confidence is entropy-based (0=uniform, 1=peaked)
     """
     # heatmap shape: (1, H, W) or (H, W)
     if heatmap.ndim == 3:
         heatmap = heatmap[0]
-    
+
     h, w = heatmap.shape
-    
+    n_pixels = h * w
+
     total = np.sum(heatmap)
-    confidence = np.max(heatmap) if total > 0 else 0.0
+    if total > 0:
+        # Entropy-based confidence: 1 - (entropy / max_entropy)
+        # Max entropy = log(n_pixels) for uniform distribution
+        # Low entropy = peaked distribution = high confidence
+        heatmap_norm = heatmap / total
+        entropy = -np.sum(heatmap_norm * np.log(heatmap_norm + 1e-10))
+        max_entropy = np.log(n_pixels)
+        confidence = 1.0 - (entropy / max_entropy)
+        confidence = float(np.clip(confidence, 0.0, 1.0))
+    else:
+        confidence = 0.0
     
     if use_weighted_avg:
         # Use weighted average (centroid) for more stable extraction
