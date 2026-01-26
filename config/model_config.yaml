@@ -7,17 +7,18 @@ heatmap:
 
 training:
   batch_size: 64
-  epochs: 500
-  patience: 50
+  epochs: 1000
+  patience: 100
   learning_rate: 0.0005
   val_split: 0.2
   num_workers: 8
   pin_memory: true
-  cache_frames: true  # Preload frames to RAM (faster, uses ~2GB for 900 samples)
+  cache_frames: true
 
 tracking:
-  smoothing: 0.1          # EMA smoothing (0.0-1.0, lower=smoother, 1.0=no smoothing)
-  min_confidence: 0.5     # Min confidence for valid zone transitions
-  min_confidence_forbidden: 0.8  # Min confidence for forbidden transitions
+  smoothing: 0.2          # EMA smoothing (0.0-1.0, lower=smoother, 1.0=no smoothing)
+  min_confidence: 0.2     # Min confidence for valid zone transitions
+  min_confidence_forbidden: 0.5  # Min confidence for forbidden transitions
   min_frames_same: 1      # Min frames in zone before switching
   # max_speed: 0.1        # Uncomment to limit movement speed (normalized 0-1 per frame)
+　
