@@ -359,10 +359,13 @@ def track_video(
         pixel_x = int(norm_x * width)
         pixel_y = int(norm_y * height)
 
-        # Calculate tube position if in a tube
+        # Calculate tube-pinned coordinates and position if in a tube
         tube_position = None
+        pinned_x, pinned_y = pixel_x, pixel_y  # Default to smoothed coords
         if pred_label.startswith('Tube_') and pred_label in zone_polygons:
             tube_position = position_along_polyline((pixel_x, pixel_y), zone_polygons[pred_label])
+            pinned_pt = closest_point_on_polyline((pixel_x, pixel_y), zone_polygons[pred_label])
+            pinned_x, pinned_y = int(pinned_pt[0]), int(pinned_pt[1])
 
         # Get likelihood/confidence for this frame
         # Use zone confidence if available, otherwise heatmap confidence (None for non-heatmap models)
@@ -371,6 +374,8 @@ def track_video(
         result_row = {
             'x': pixel_x,
             'y': pixel_y,
+            'x_pinned': pinned_x,
+            'y_pinned': pinned_y,
             'likelihood': likelihood,
             'zone': pred_label,
             'tube_position': tube_position,
@@ -436,7 +441,7 @@ def track_video(
     # Format: scorer, bodyparts, coords as first 3 rows, then data
     scorer = "3DMazeTrack"
     bodypart = "LED"
-    columns = ['x', 'y', 'likelihood', 'zone', 'tube_position']
+    columns = ['x', 'y', 'x_pinned', 'y_pinned', 'likelihood', 'zone', 'tube_position']
 
     # Create multi-index columns
     header_tuples = [(scorer, bodypart, col) for col in columns]
