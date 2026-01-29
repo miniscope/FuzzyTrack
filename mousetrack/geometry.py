@@ -250,7 +250,10 @@ def get_zone_probabilities(
             
             if min_dist <= tube_max_distance:
                 if soft_boundary:
-                    probs[zone_name] = max(0.0, 1.0 - min_dist / tube_max_distance)
+                    # Use square root decay for softer, less peaky distribution
+                    # sqrt makes distant zones retain more probability
+                    normalized_dist = min_dist / tube_max_distance
+                    probs[zone_name] = max(0.0, 1.0 - normalized_dist ** 0.5)
                 else:
                     probs[zone_name] = 1.0
     

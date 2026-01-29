@@ -47,22 +47,38 @@ class MouseHeatmapCNN(nn.Module):
         self.backbone = nn.Sequential(*list(bb.children())[:-2])  # Remove avgpool and fc
 
         # Upsample from backbone's final feature map (7x7) to heatmap size (56x56)
+        # Added BatchNorm and Dropout for regularization
         self.heatmap_head = nn.Sequential(
             nn.Conv2d(feature_dim, 256, kernel_size=3, padding=1),
-            nn.ReLU(),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.Dropout2d(0.1),
             nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1),  # 7x7 -> 14x14
-            nn.ReLU(),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.Dropout2d(0.1),
             nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),  # 14x14 -> 28x28
-            nn.ReLU(),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
             nn.ConvTranspose2d(64, 1, kernel_size=4, stride=2, padding=1),  # 28x28 -> 56x56
         )
+
+        # Initialize weights
+        self._init_heatmap_head()
+
+    def _init_heatmap_head(self):
+        """Initialize heatmap head with proper weights."""
+        for m in self.heatmap_head.modules():
+            if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d)):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
         features = self.backbone(x)  # (batch, feature_dim, 7, 7)
         heatmap = self.heatmap_head(features)  # (batch, 1, 56, 56)
-        # Apply softmax across spatial dimensions to get probability distribution
-        batch_size = heatmap.shape[0]
-        heatmap_flat = heatmap.view(batch_size, -1)
-        heatmap_flat = torch.softmax(heatmap_flat, dim=1)
-        heatmap = heatmap_flat.view(batch_size, 1, HEATMAP_SIZE[0], HEATMAP_SIZE[1])
+        # Return raw heatmap (no softmax normalization)
         return heatmap

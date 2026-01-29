@@ -16,6 +16,42 @@ from .config import IMG_SIZE, HEATMAP_SIZE
 from . import logger
 
 
+class HeatmapLoss(nn.Module):
+    """Combined MSE + peak coordinate loss for heatmap regression."""
+    def __init__(self, mse_weight=1.0, coord_weight=10.0):
+        super().__init__()
+        self.mse_weight = mse_weight
+        self.coord_weight = coord_weight
+        self.mse = nn.MSELoss()
+
+    def forward(self, pred_heatmap, target_heatmap):
+        """
+        Args:
+            pred_heatmap: (B, 1, H, W) predicted heatmap
+            target_heatmap: (B, 1, H, W) target heatmap
+        """
+        # 1. Standard MSE loss on heatmaps
+        mse_loss = self.mse(pred_heatmap, target_heatmap)
+
+        # 2. Peak coordinate loss (forces correct peak location)
+        B, C, H, W = target_heatmap.shape
+        target_flat = target_heatmap.view(B, -1)
+        target_max_indices = torch.argmax(target_flat, dim=1)
+        target_y = (target_max_indices // W).float() / (H - 1)
+        target_x = (target_max_indices % W).float() / (W - 1)
+
+        # Extract peak from prediction
+        pred_flat = pred_heatmap.view(B, -1)
+        pred_max_indices = torch.argmax(pred_flat, dim=1)
+        pred_y = (pred_max_indices // W).float() / (H - 1)
+        pred_x = (pred_max_indices % W).float() / (W - 1)
+
+        # L2 distance between peaks
+        coord_loss = torch.mean((pred_x - target_x)**2 + (pred_y - target_y)**2)
+
+        return self.mse_weight * mse_loss + self.coord_weight * coord_loss
+
+
 def train_cnn(
     video_paths: Union[str, List[str]],
     annotations_paths: Union[str, List[str]],
@@ -77,6 +113,20 @@ def train_cnn(
     train_size = len(full_dataset) - val_size
     train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
 
+    # Set is_train flag for augmentation
+    def set_is_train(dataset, is_train):
+        """Recursively set is_train on underlying datasets."""
+        if hasattr(dataset, 'dataset'):  # Subset
+            set_is_train(dataset.dataset, is_train)
+        elif hasattr(dataset, 'datasets'):  # ConcatDataset
+            for ds in dataset.datasets:
+                ds.is_train = is_train
+        else:  # Base dataset
+            dataset.is_train = is_train
+
+    set_is_train(train_dataset, True)
+    set_is_train(val_dataset, False)
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -107,13 +157,24 @@ def train_cnn(
     # Model and optimizer
     if use_heatmap:
         model = MouseHeatmapCNN(backbone=backbone)
-        criterion = nn.MSELoss()  # MSE loss on heatmaps
+        # Use hybrid loss: MSE + peak coordinate loss
+        criterion = HeatmapLoss(mse_weight=1.0, coord_weight=10.0)
     else:
         model = MouseCNN(backbone=backbone)
         criterion = nn.MSELoss()
 
     model = model.to(device)
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    # Use AdamW with weight decay for regularization
+    optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+
+    # Learning rate scheduler: reduce LR on plateau
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode='min',
+        factor=0.5,
+        patience=10,
+        min_lr=1e-6
+    )
 
     # Get video dimensions from first video
     cap = cv2.VideoCapture(video_paths[0])
@@ -147,6 +208,8 @@ def train_cnn(
             pred = model(imgs)
             loss = criterion(pred, targets)
             loss.backward()
+            # Gradient clipping to prevent exploding gradients
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             train_loss += loss.item()
 
@@ -163,10 +226,15 @@ def train_cnn(
                 val_loss += loss.item()
         
         avg_val_loss = val_loss / len(val_loader)
-        
+
+        # Step learning rate scheduler
+        scheduler.step(avg_val_loss)
+        current_lr = optimizer.param_groups[0]['lr']
+
         # Log to TensorBoard
         writer.add_scalar("Loss/train_coord", avg_train_loss, epoch)
         writer.add_scalar("Loss/val_coord", avg_val_loss, epoch)
+        writer.add_scalar("LearningRate", current_lr, epoch)
         
         # Early stopping
         improvement = best_val_loss - avg_val_loss

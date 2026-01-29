@@ -3,12 +3,12 @@ model:
   use_heatmap: true   # true for heatmap mode, false for regression
 
 heatmap:
-  sigma: 2.0  # Gaussian sigma for target heatmap
+  sigma: 3.0  # Gaussian sigma for target heatmap (increased for smoother targets)
 
 training:
-  batch_size: 64
+  batch_size: 8  # Reduced from 64 to get more batches/epoch (720/8=90 batches vs 11)
   epochs: 1000
-  patience: 100
+  patience: 50
   learning_rate: 0.0005
   val_split: 0.2
   num_workers: 8
@@ -17,9 +17,8 @@ training:
 
 tracking:
   smoothing: 0.2          # EMA smoothing (0.0-1.0, lower=smoother, 1.0=no smoothing)
-  min_confidence: 0.2     # Min confidence for valid zone transitions
-  min_confidence_forbidden: 0.5  # Min confidence for forbidden transitions
+  min_confidence: 0.4     # Min confidence for valid zone transitions
+  min_confidence_forbidden: 0.99  # Min confidence for forbidden transitions
   min_frames_same: 1      # Min frames in zone before switching
   heatmap_min_confidence: 0.4  # Min heatmap confidence during warmup (entropy-based, 0=uniform, 1=peaked)
   # max_speed: 0.1        # Uncomment to limit movement speed (normalized 0-1 per frame)
-　

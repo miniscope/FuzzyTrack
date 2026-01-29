@@ -78,6 +78,9 @@ def extract_coords_from_heatmap(heatmap: np.ndarray, use_weighted_avg: bool = Tr
     if heatmap.ndim == 3:
         heatmap = heatmap[0]
 
+    # Ensure non-negative values (model can output negatives without softmax)
+    heatmap = np.maximum(heatmap, 0.0)
+
     h, w = heatmap.shape
     n_pixels = h * w
 
@@ -282,9 +285,12 @@ def track_video(
         norm_x, norm_y = raw_coords
         pred_x = norm_x * width
         pred_y = norm_y * height
-        
+
+        # Initialize zone_probs for later display
+        zone_probs = {}
+
         if zone_polygons:
-            zone_probs = get_zone_probabilities(pred_x, pred_y, zone_polygons, tube_max_distance=20.0, soft_boundary=True, normalize=True)
+            zone_probs = get_zone_probabilities(pred_x, pred_y, zone_polygons, tube_max_distance=60.0, soft_boundary=True, normalize=True)
             if zone_probs:
                 new_zone = max(zone_probs, key=zone_probs.get)
                 pred_confidence = zone_probs[new_zone]
@@ -297,12 +303,13 @@ def track_video(
         
         if current_zone is not None and new_zone is not None:
             if not is_valid_transition(current_zone, new_zone, zone_graph):
+                # Invalid transition - check if there are valid alternatives with better confidence
                 if zone_polygons:
                     valid_alternatives = []
                     for alt_zone, alt_prob in zone_probs.items():
-                        if alt_prob > 0 and is_valid_transition(current_zone, alt_zone, zone_graph):
+                        if alt_prob > 0 and alt_zone != new_zone and is_valid_transition(current_zone, alt_zone, zone_graph):
                             valid_alternatives.append((alt_zone, alt_prob))
-                    
+
                     if valid_alternatives:
                         best_alt_zone = None
                         best_alt_prob = 0.0
@@ -310,21 +317,16 @@ def track_video(
                             if alt_prob > best_alt_prob:
                                 best_alt_prob = alt_prob
                                 best_alt_zone = alt_zone
-                        if best_alt_prob >= min_confidence:
+                        # Only use alternative if it has better confidence than detected zone
+                        if best_alt_prob >= min_confidence and best_alt_prob > pred_confidence:
                             new_zone = best_alt_zone
                             pred_confidence = best_alt_prob
-                        else:
-                            new_zone = current_zone
-                            pred_confidence = zone_probs.get(current_zone, 0.0)
-                    else:
-                        new_zone = current_zone
-                        pred_confidence = zone_probs.get(current_zone, 0.0)
+                        # else: keep new_zone as detected (will be checked against min_confidence_forbidden later)
         
         if current_zone is None:
             if frame_idx < warmup_frames:
-                if use_heatmap and len(warmup_coords) < min_warmup_confident_frames:
-                    pass
-                elif new_zone and pred_confidence >= min_confidence:
+                # Accumulate zone candidates during warmup (no heatmap confidence check)
+                if new_zone and pred_confidence >= min_confidence:
                     if new_zone not in warmup_zone_candidates:
                         warmup_zone_candidates[new_zone] = 0
                     warmup_zone_candidates[new_zone] += 1
@@ -343,14 +345,13 @@ def track_video(
                             current_zone = best_candidate[0]
                             frames_in_current_zone = warmup_frames
                         else:
-                            required_conf = max(min_confidence, 0.6) if use_heatmap else min_confidence
-                            if new_zone and pred_confidence >= required_conf:
+                            # Fallback: use configured min_confidence, not hardcoded 0.6
+                            if new_zone and pred_confidence >= min_confidence:
                                 current_zone = new_zone
                                 frames_in_current_zone = 1
             else:
-                if use_heatmap and len(warmup_coords) < min_warmup_confident_frames:
-                    pass
-                elif new_zone and pred_confidence >= min_confidence:
+                # After warmup: assign zone if confidence meets threshold (no warmup_coords check)
+                if new_zone and pred_confidence >= min_confidence:
                     current_zone = new_zone
                     frames_in_current_zone = 1
         elif new_zone == current_zone:
@@ -414,6 +415,49 @@ def track_video(
 
         cv2.putText(frame, f"Frame: {frame_idx}", (20, height - 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+        # Display zone information with confidences
+        y_offset = 30
+
+        # Find highest probability zone for comparison
+        detected_zone = None
+        detected_conf = 0.0
+        if zone_probs:
+            detected_zone = max(zone_probs, key=zone_probs.get)
+            detected_conf = zone_probs[detected_zone]
+
+        # Show tracked vs detected zone
+        if detected_zone and detected_zone != pred_label:
+            # MISMATCH: tracking different zone than detected
+            cv2.putText(frame, f"Tracking: {pred_label} | Detected: {detected_zone}", (20, y_offset),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)  # Orange warning
+        else:
+            cv2.putText(frame, f"Zone: {pred_label}", (20, y_offset),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)  # Green OK
+        y_offset += 25
+
+        # Show all zone candidates with their probabilities
+        if zone_probs:
+            cv2.putText(frame, "Candidates:", (20, y_offset),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+            y_offset += 18
+
+            sorted_zones = sorted(zone_probs.items(), key=lambda x: x[1], reverse=True)
+            displayed = 0
+            for zone_name, zone_prob in sorted_zones:
+                if zone_prob > 0.001 and displayed < 6:
+                    # Color code: green=tracked, orange=highest but not tracked, gray=other
+                    if zone_name == pred_label:
+                        color = (0, 255, 0)  # Green: current tracked zone
+                    elif zone_name == detected_zone:
+                        color = (0, 165, 255)  # Orange: highest prob but not tracked
+                    else:
+                        color = (180, 180, 180)  # Gray: other
+
+                    cv2.putText(frame, f"  {zone_name}: {zone_prob:.3f}", (20, y_offset),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+                    y_offset += 18
+                    displayed += 1
 
         # Create output frame (side-by-side with heatmap if in heatmap mode)
         if use_heatmap:
