@@ -30,6 +30,7 @@ DEFAULT_CONFIG = {
         'min_confidence': 0.5,
         'min_confidence_forbidden': 0.8,
         'min_frames_same': 1,
+        'min_frames_forbidden': 3,
         'max_speed': None,
     },
 }

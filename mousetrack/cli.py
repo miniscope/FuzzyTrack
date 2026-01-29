@@ -83,6 +83,7 @@ def track(video, config, cnn_model, output_video, output_csv, zone_polygons, zon
     min_confidence = cfg['tracking']['min_confidence']
     min_confidence_forbidden = cfg['tracking']['min_confidence_forbidden']
     min_frames_same = cfg['tracking']['min_frames_same']
+    min_frames_forbidden = cfg['tracking'].get('min_frames_forbidden', 3)
     max_speed = cfg['tracking'].get('max_speed')
     heatmap_min_confidence = cfg['tracking'].get('heatmap_min_confidence', 0.05)
 
@@ -106,6 +107,7 @@ def track(video, config, cnn_model, output_video, output_csv, zone_polygons, zon
         min_confidence=min_confidence,
         min_confidence_forbidden=min_confidence_forbidden,
         min_frames_same=min_frames_same,
+        min_frames_forbidden=min_frames_forbidden,
         max_speed=max_speed,
         smoothing=smoothing,
         backbone=backbone,

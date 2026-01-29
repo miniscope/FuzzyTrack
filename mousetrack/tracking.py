@@ -135,7 +135,8 @@ def track_video(
     min_confidence: float,
     min_confidence_forbidden: float,
     min_frames_same: int,
-    max_speed: Optional[float],
+    min_frames_forbidden: int = 3,
+    max_speed: Optional[float] = None,
     smoothing: float = 0.5,
     backbone: str = 'resnet18',
     use_heatmap: bool = True,
@@ -214,6 +215,10 @@ def track_video(
     current_zone = None
     frames_in_current_zone = 0
     prev_refined_coords = None  # Previous refined coordinates for max_speed constraint
+
+    # Forbidden transition tracking: require consecutive frames above threshold
+    forbidden_candidate_zone = None
+    forbidden_consecutive_frames = 0
     
     # Warm-up period for stable initialization
     warmup_frames = 30 if use_heatmap else 5  # Much longer warm-up for heatmap
@@ -356,15 +361,45 @@ def track_video(
                     frames_in_current_zone = 1
         elif new_zone == current_zone:
             frames_in_current_zone += 1
+            # Reset forbidden tracking when staying in same zone
+            forbidden_candidate_zone = None
+            forbidden_consecutive_frames = 0
         else:
             is_valid = is_valid_transition(current_zone, new_zone, zone_graph)
-            required_confidence = min_confidence_forbidden if not is_valid else min_confidence
-            
-            if pred_confidence >= required_confidence and frames_in_current_zone >= min_frames_same:
-                current_zone = new_zone
-                frames_in_current_zone = 1
+
+            if is_valid:
+                # Valid transition: standard confidence check
+                if pred_confidence >= min_confidence and frames_in_current_zone >= min_frames_same:
+                    current_zone = new_zone
+                    frames_in_current_zone = 1
+                    forbidden_candidate_zone = None
+                    forbidden_consecutive_frames = 0
+                else:
+                    frames_in_current_zone += 1
             else:
-                frames_in_current_zone += 1
+                # Forbidden transition: require consecutive frames above threshold
+                if pred_confidence >= min_confidence_forbidden:
+                    # Above threshold - check if same zone as previous frame
+                    if new_zone == forbidden_candidate_zone:
+                        forbidden_consecutive_frames += 1
+                    else:
+                        # Different zone - restart counter
+                        forbidden_candidate_zone = new_zone
+                        forbidden_consecutive_frames = 1
+
+                    # Allow transition if enough consecutive frames
+                    if forbidden_consecutive_frames >= min_frames_forbidden and frames_in_current_zone >= min_frames_same:
+                        current_zone = new_zone
+                        frames_in_current_zone = 1
+                        forbidden_candidate_zone = None
+                        forbidden_consecutive_frames = 0
+                    else:
+                        frames_in_current_zone += 1
+                else:
+                    # Below threshold - reset forbidden tracking
+                    forbidden_candidate_zone = None
+                    forbidden_consecutive_frames = 0
+                    frames_in_current_zone += 1
         
         pred_label = current_zone if current_zone else "Unknown"
 
