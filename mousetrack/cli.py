@@ -1,5 +1,6 @@
 """Command-line interface for mouse tracking."""
 from datetime import datetime
+from pathlib import Path
 import click
 
 from .training import train_cnn as train_cnn_func
@@ -16,14 +17,54 @@ def main():
 
 
 @main.command()
-@click.option('--video', '-v', required=True, multiple=True, type=click.Path(exists=True), help='Video file(s) - can specify multiple')
-@click.option('--annotations', '-a', required=True, multiple=True, type=click.Path(exists=True), help='Annotations CSV(s) - must match videos')
+@click.option('--video', '-v', multiple=True, type=click.Path(exists=True), help='Video file(s) - can specify multiple')
+@click.option('--annotations', '-a', multiple=True, type=click.Path(exists=True), help='Annotations CSV(s) - must match videos')
+@click.option('--data-root', '-d', type=click.Path(exists=True), help='Root directory containing subdirs, each with a .mp4 and .csv file')
 @click.option('--config', '-c', required=True, type=click.Path(exists=True), help='Config YAML file')
 @click.option('--output', '-o', default=None, type=click.Path(), help='Output model path')
-def train_cnn(video, annotations, config, output):
+def train_cnn(video, annotations, data_root, config, output):
     """Train CNN model."""
-    if len(video) != len(annotations):
-        raise click.BadParameter(f"Number of videos ({len(video)}) must match number of annotations ({len(annotations)})")
+    # Determine which mode we're in
+    if data_root:
+        if video or annotations:
+            raise click.BadParameter("Cannot use --data-root together with --video or --annotations")
+
+        # Scan data_root for subdirectories with .mp4 and .csv files
+        data_root_path = Path(data_root)
+        video_list = []
+        annotations_list = []
+
+        for subdir in sorted(data_root_path.iterdir()):
+            if not subdir.is_dir():
+                continue
+
+            # Find .mp4 and .csv files
+            video_files = list(subdir.glob('*.mp4'))
+            csv_files = list(subdir.glob('*.csv'))
+
+            if video_files and csv_files:
+                video_list.append(str(video_files[0]))
+                annotations_list.append(str(csv_files[0]))
+                click.echo(f"Found: {subdir.name}")
+            else:
+                missing = []
+                if not video_files:
+                    missing.append("*.mp4")
+                if not csv_files:
+                    missing.append("*.csv")
+                click.echo(f"Warning: Skipping {subdir.name} - missing {', '.join(missing)}", err=True)
+
+        if not video_list:
+            raise click.BadParameter(f"No valid subdirectories found in {data_root}. Each subdirectory should contain a .mp4 and .csv file")
+
+        video = tuple(video_list)
+        annotations = tuple(annotations_list)
+        click.echo(f"Loaded {len(video)} video/annotation pairs from {data_root}")
+    else:
+        if not video or not annotations:
+            raise click.BadParameter("Must provide either --data-root OR both --video and --annotations")
+        if len(video) != len(annotations):
+            raise click.BadParameter(f"Number of videos ({len(video)}) must match number of annotations ({len(annotations)})")
 
     cfg = load_config(config)
 
