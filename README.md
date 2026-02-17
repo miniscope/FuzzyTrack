@@ -1,6 +1,6 @@
-# 3D Maze Track
+# FuzzyTrack
 
-Mouse tracking package for 3D maze videos.
+Mouse tracking package for fuzzy videos.
 
 ## Installation
 
