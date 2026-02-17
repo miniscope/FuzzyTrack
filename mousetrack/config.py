@@ -32,6 +32,7 @@ DEFAULT_CONFIG = {
         'min_frames_same': 1,
         'min_frames_forbidden': 3,
         'max_speed': None,
+        'enable_zones': False,
     },
 }
 

@@ -141,6 +141,7 @@ def track_video(
     backbone: str = 'resnet18',
     use_heatmap: bool = True,
     heatmap_min_confidence: float = 0.05,
+    enable_zones: bool = False,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
@@ -159,16 +160,19 @@ def track_video(
     cnn.to(device)
     cnn.eval()
     logger.info("CNN model loaded successfully.")
-    
-    # Load zone geometry
-    zone_polygons = load_zone_geometry(zone_polygons_file)
-    if not zone_polygons:
-        logger.warning(f"No zone polygons found in {zone_polygons_file}")
-    else:
-        logger.info(f"Loaded {len(zone_polygons)} zone polygons")
-    
-    # Load zone graph
-    zone_graph = load_zone_graph(zone_graph_file)
+
+    # Load zone geometry (only if zones enabled)
+    zone_polygons = {}
+    zone_graph = {}
+    if enable_zones:
+        zone_polygons = load_zone_geometry(zone_polygons_file)
+        if not zone_polygons:
+            logger.warning(f"No zone polygons found in {zone_polygons_file}")
+        else:
+            logger.info(f"Loaded {len(zone_polygons)} zone polygons")
+
+        # Load zone graph
+        zone_graph = load_zone_graph(zone_graph_file)
     
     # Open video
     cap = cv2.VideoCapture(video_path)
@@ -294,7 +298,7 @@ def track_video(
         # Initialize zone_probs for later display
         zone_probs = {}
 
-        if zone_polygons:
+        if enable_zones and zone_polygons:
             zone_probs = get_zone_probabilities(pred_x, pred_y, zone_polygons, tube_max_distance=60.0, soft_boundary=True, normalize=True)
             if zone_probs:
                 new_zone = max(zone_probs, key=zone_probs.get)
@@ -406,31 +410,42 @@ def track_video(
         pixel_x = int(norm_x * width)
         pixel_y = int(norm_y * height)
 
-        # Calculate tube-pinned coordinates and position if in a tube
+        # Calculate tube-pinned coordinates and position if in a tube (only if zones enabled)
         tube_position = None
         pinned_x, pinned_y = pixel_x, pixel_y  # Default to smoothed coords
-        if pred_label.startswith('Tube_') and pred_label in zone_polygons:
+        if enable_zones and pred_label.startswith('Tube_') and pred_label in zone_polygons:
             tube_position = position_along_polyline((pixel_x, pixel_y), zone_polygons[pred_label])
             pinned_pt = closest_point_on_polyline((pixel_x, pixel_y), zone_polygons[pred_label])
             pinned_x, pinned_y = int(pinned_pt[0]), int(pinned_pt[1])
 
         # Get likelihood/confidence for this frame
         # Use zone confidence if available, otherwise heatmap confidence (None for non-heatmap models)
-        likelihood = pred_confidence if pred_confidence > 0 else heatmap_conf
+        if enable_zones:
+            likelihood = pred_confidence if pred_confidence > 0 else heatmap_conf
+        else:
+            likelihood = heatmap_conf
 
-        result_row = {
-            'x': pixel_x,
-            'y': pixel_y,
-            'x_pinned': pinned_x,
-            'y_pinned': pinned_y,
-            'likelihood': likelihood,
-            'zone': pred_label,
-            'tube_position': tube_position,
-        }
+        # Construct result row based on whether zones are enabled
+        if enable_zones:
+            result_row = {
+                'x': pixel_x,
+                'y': pixel_y,
+                'x_pinned': pinned_x,
+                'y_pinned': pinned_y,
+                'likelihood': likelihood,
+                'zone': pred_label,
+                'tube_position': tube_position,
+            }
+        else:
+            result_row = {
+                'x': pixel_x,
+                'y': pixel_y,
+                'likelihood': likelihood if likelihood is not None else 0.0,
+            }
 
         results.append(result_row)
-        
-        if pred_label in zone_polygons:
+
+        if enable_zones and pred_label in zone_polygons:
             points = zone_polygons[pred_label]
             zone_color = (100, 200, 100)
             overlay_alpha = 0.3
@@ -451,28 +466,29 @@ def track_video(
         cv2.putText(frame, f"Frame: {frame_idx}", (20, height - 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
-        # Display zone information with confidences
+        # Display zone information with confidences (only if zones enabled)
         y_offset = 30
 
-        # Find highest probability zone for comparison
-        detected_zone = None
-        detected_conf = 0.0
-        if zone_probs:
-            detected_zone = max(zone_probs, key=zone_probs.get)
-            detected_conf = zone_probs[detected_zone]
+        if enable_zones:
+            # Find highest probability zone for comparison
+            detected_zone = None
+            detected_conf = 0.0
+            if zone_probs:
+                detected_zone = max(zone_probs, key=zone_probs.get)
+                detected_conf = zone_probs[detected_zone]
 
-        # Show tracked vs detected zone
-        if detected_zone and detected_zone != pred_label:
-            # MISMATCH: tracking different zone than detected
-            cv2.putText(frame, f"Tracking: {pred_label} | Detected: {detected_zone}", (20, y_offset),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)  # Orange warning
-        else:
-            cv2.putText(frame, f"Zone: {pred_label}", (20, y_offset),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)  # Green OK
-        y_offset += 25
+            # Show tracked vs detected zone
+            if detected_zone and detected_zone != pred_label:
+                # MISMATCH: tracking different zone than detected
+                cv2.putText(frame, f"Tracking: {pred_label} | Detected: {detected_zone}", (20, y_offset),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)  # Orange warning
+            else:
+                cv2.putText(frame, f"Zone: {pred_label}", (20, y_offset),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)  # Green OK
+            y_offset += 25
 
         # Show all zone candidates with their probabilities
-        if zone_probs:
+        if enable_zones and zone_probs:
             cv2.putText(frame, "Candidates:", (20, y_offset),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
             y_offset += 18
@@ -531,7 +547,12 @@ def track_video(
     # Format: scorer, bodyparts, coords as first 3 rows, then data
     scorer = "3DMazeTrack"
     bodypart = "LED"
-    columns = ['x', 'y', 'x_pinned', 'y_pinned', 'likelihood', 'zone', 'tube_position']
+
+    # Column list depends on whether zones are enabled
+    if enable_zones:
+        columns = ['x', 'y', 'x_pinned', 'y_pinned', 'likelihood', 'zone', 'tube_position']
+    else:
+        columns = ['x', 'y', 'likelihood']
 
     # Create multi-index columns
     header_tuples = [(scorer, bodypart, col) for col in columns]
