@@ -212,5 +212,3 @@ assets/*.csv
 models/*.pth
 output/*
 runs/*
-config/zone_polygons.yaml
-config/zone_graph.yaml

@@ -57,29 +57,29 @@ def _point_to_segment_distance(point: Tuple[float, float], seg_start: np.ndarray
 def closest_point_on_polyline(point: Tuple[float, float], polyline: np.ndarray) -> np.ndarray:
     """
     Find the closest point on a polyline to a given point.
-    
+
     Args:
         point: (x, y) coordinate
         polyline: Array of points defining the polyline
-    
+
     Returns:
         Closest point on the polyline as (x, y) numpy array
     """
     point = np.array(point, dtype=np.float32)
     polyline = np.array(polyline, dtype=np.float32)
-    
+
     min_dist = float('inf')
     closest_point = None
-    
+
     for i in range(len(polyline) - 1):
         p1 = polyline[i]
         p2 = polyline[i + 1]
-        
+
         # Vector from p1 to p2
         seg_vec = p2 - p1
         # Vector from p1 to point
         point_vec = point - p1
-        
+
         # Project point_vec onto seg_vec
         seg_len_sq = np.dot(seg_vec, seg_vec)
         if seg_len_sq == 0:
@@ -88,17 +88,81 @@ def closest_point_on_polyline(point: Tuple[float, float], polyline: np.ndarray) 
         else:
             t = np.clip(np.dot(point_vec, seg_vec) / seg_len_sq, 0.0, 1.0)
             candidate = p1 + t * seg_vec
-        
+
         dist = np.linalg.norm(point - candidate)
         if dist < min_dist:
             min_dist = dist
             closest_point = candidate
-    
+
     # If polyline has only one point
     if closest_point is None and len(polyline) > 0:
         closest_point = polyline[0]
-    
+
     return closest_point.astype(np.int32)
+
+
+def position_along_polyline(point: Tuple[float, float], polyline: np.ndarray) -> float:
+    """
+    Calculate the normalized position (0-1) along a polyline for a given point.
+
+    The position is calculated by finding the closest point on the polyline
+    and measuring the arc length from the start to that point, normalized
+    by the total polyline length.
+
+    Args:
+        point: (x, y) coordinate
+        polyline: Array of points defining the polyline
+
+    Returns:
+        Position along the polyline from 0 (start) to 1 (end)
+    """
+    point = np.array(point, dtype=np.float32)
+    polyline = np.array(polyline, dtype=np.float32)
+
+    if len(polyline) < 2:
+        return 0.0
+
+    # Calculate cumulative distances along polyline
+    segment_lengths = []
+    for i in range(len(polyline) - 1):
+        seg_len = np.linalg.norm(polyline[i + 1] - polyline[i])
+        segment_lengths.append(seg_len)
+
+    total_length = sum(segment_lengths)
+    if total_length == 0:
+        return 0.0
+
+    # Find closest segment and position on it
+    min_dist = float('inf')
+    best_segment_idx = 0
+    best_t = 0.0
+
+    for i in range(len(polyline) - 1):
+        p1 = polyline[i]
+        p2 = polyline[i + 1]
+
+        seg_vec = p2 - p1
+        point_vec = point - p1
+
+        seg_len_sq = np.dot(seg_vec, seg_vec)
+        if seg_len_sq == 0:
+            t = 0.0
+            candidate = p1
+        else:
+            t = np.clip(np.dot(point_vec, seg_vec) / seg_len_sq, 0.0, 1.0)
+            candidate = p1 + t * seg_vec
+
+        dist = np.linalg.norm(point - candidate)
+        if dist < min_dist:
+            min_dist = dist
+            best_segment_idx = i
+            best_t = t
+
+    # Calculate arc length to closest point
+    arc_length = sum(segment_lengths[:best_segment_idx])
+    arc_length += best_t * segment_lengths[best_segment_idx]
+
+    return arc_length / total_length
 
 
 def load_zone_geometry(zone_polygons_file: str = 'config/zone_polygons.yaml') -> Dict[str, np.ndarray]:
@@ -186,7 +250,10 @@ def get_zone_probabilities(
             
             if min_dist <= tube_max_distance:
                 if soft_boundary:
-                    probs[zone_name] = max(0.0, 1.0 - min_dist / tube_max_distance)
+                    # Use square root decay for softer, less peaky distribution
+                    # sqrt makes distant zones retain more probability
+                    normalized_dist = min_dist / tube_max_distance
+                    probs[zone_name] = max(0.0, 1.0 - normalized_dist ** 0.5)
                 else:
                     probs[zone_name] = 1.0
     

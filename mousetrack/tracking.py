@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from .models import MouseCNN, MouseHeatmapCNN
 from .config import IMG_SIZE, HEATMAP_SIZE
-from .geometry import load_zone_geometry, get_zone_probabilities, closest_point_on_polyline
+from .geometry import load_zone_geometry, get_zone_probabilities, closest_point_on_polyline, position_along_polyline
 from . import logger
 
 
@@ -66,22 +66,36 @@ def is_valid_transition(current_zone: str, new_zone: str, zone_graph: Dict) -> b
 
 def extract_coords_from_heatmap(heatmap: np.ndarray, use_weighted_avg: bool = True) -> tuple[np.ndarray, float]:
     """Extract coordinates from heatmap.
-    
+
     Args:
         heatmap: Heatmap array, shape (1, H, W) or (H, W)
         use_weighted_avg: If True, use weighted average (centroid). If False, use argmax.
-    
+
     Returns:
-        Tuple of (coordinates, confidence) where confidence is the peak value or entropy-based measure
+        Tuple of (coordinates, confidence) where confidence is entropy-based (0=uniform, 1=peaked)
     """
     # heatmap shape: (1, H, W) or (H, W)
     if heatmap.ndim == 3:
         heatmap = heatmap[0]
-    
+
+    # Ensure non-negative values (model can output negatives without softmax)
+    heatmap = np.maximum(heatmap, 0.0)
+
     h, w = heatmap.shape
-    
+    n_pixels = h * w
+
     total = np.sum(heatmap)
-    confidence = np.max(heatmap) if total > 0 else 0.0
+    if total > 0:
+        # Entropy-based confidence: 1 - (entropy / max_entropy)
+        # Max entropy = log(n_pixels) for uniform distribution
+        # Low entropy = peaked distribution = high confidence
+        heatmap_norm = heatmap / total
+        entropy = -np.sum(heatmap_norm * np.log(heatmap_norm + 1e-10))
+        max_entropy = np.log(n_pixels)
+        confidence = 1.0 - (entropy / max_entropy)
+        confidence = float(np.clip(confidence, 0.0, 1.0))
+    else:
+        confidence = 0.0
     
     if use_weighted_avg:
         # Use weighted average (centroid) for more stable extraction
@@ -121,33 +135,44 @@ def track_video(
     min_confidence: float,
     min_confidence_forbidden: float,
     min_frames_same: int,
-    max_speed: Optional[float],
+    min_frames_forbidden: int = 3,
+    max_speed: Optional[float] = None,
+    smoothing: float = 0.5,
+    backbone: str = 'resnet18',
     use_heatmap: bool = True,
+    heatmap_min_confidence: float = 0.05,
+    enable_zones: bool = False,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
+    logger.info(f"Using device: {device}")
+    logger.info(f"Backbone: {backbone}")
+    logger.info(f"Smoothing factor: {smoothing}" + (" (no smoothing)" if smoothing >= 1.0 else ""))
+
     # Load CNN model
     if use_heatmap:
-        cnn = MouseHeatmapCNN()
+        cnn = MouseHeatmapCNN(backbone=backbone)
         logger.info("Loading heatmap CNN model...")
     else:
-        cnn = MouseCNN()
+        cnn = MouseCNN(backbone=backbone)
         logger.info("Loading coordinate CNN model...")
     
     cnn.load_state_dict(torch.load(cnn_model_path, map_location=device))
     cnn.to(device)
     cnn.eval()
     logger.info("CNN model loaded successfully.")
-    
-    # Load zone geometry
-    zone_polygons = load_zone_geometry(zone_polygons_file)
-    if not zone_polygons:
-        logger.warning(f"No zone polygons found in {zone_polygons_file}")
-    else:
-        logger.info(f"Loaded {len(zone_polygons)} zone polygons")
-    
-    # Load zone graph
-    zone_graph = load_zone_graph(zone_graph_file)
+
+    # Load zone geometry (only if zones enabled)
+    zone_polygons = {}
+    zone_graph = {}
+    if enable_zones:
+        zone_polygons = load_zone_geometry(zone_polygons_file)
+        if not zone_polygons:
+            logger.warning(f"No zone polygons found in {zone_polygons_file}")
+        else:
+            logger.info(f"Loaded {len(zone_polygons)} zone polygons")
+
+        # Load zone graph
+        zone_graph = load_zone_graph(zone_graph_file)
     
     # Open video
     cap = cv2.VideoCapture(video_path)
@@ -161,10 +186,17 @@ def track_video(
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
     logger.info(f"Input video: {width}x{height} @ {fps} fps, {total_frames} frames")
-    
-    # Create video writer
+
+    # Create output directories if needed
+    for path in [output_video, output_csv]:
+        output_dir = os.path.dirname(path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
+    # Create video writer (side-by-side for heatmap mode)
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out_video = cv2.VideoWriter(output_video, fourcc, fps, (width, height))
+    output_width = width * 2 if use_heatmap else width
+    out_video = cv2.VideoWriter(output_video, fourcc, fps, (output_width, height))
     if not out_video.isOpened():
         logger.error(f"Error creating output video: {output_video}")
         cap.release()
@@ -187,12 +219,16 @@ def track_video(
     current_zone = None
     frames_in_current_zone = 0
     prev_refined_coords = None  # Previous refined coordinates for max_speed constraint
+
+    # Forbidden transition tracking: require consecutive frames above threshold
+    forbidden_candidate_zone = None
+    forbidden_consecutive_frames = 0
     
     # Warm-up period for stable initialization
     warmup_frames = 30 if use_heatmap else 5  # Much longer warm-up for heatmap
     warmup_zone_candidates = {}  # Track zone candidates during warm-up
     warmup_coords = []  # Track coordinates during warm-up for smoothing
-    heatmap_min_confidence = 0.3  # Minimum heatmap confidence to accept prediction (higher = more strict)
+    # heatmap_min_confidence is passed as parameter
     min_warmup_confident_frames = 10 if use_heatmap else 3  # Need at least N confident predictions before starting
     
     results = []
@@ -219,11 +255,12 @@ def track_video(
             model_out = cnn(input_tensor)
         
         # Extract coordinates from model output
+        heatmap_conf = None  # Only set for heatmap models
         if use_heatmap:
             # Model outputs heatmap, extract coordinates using weighted average for stability
             heatmap = model_out[0, 0].cpu().numpy()  # (H, W)
             raw_coords, heatmap_conf = extract_coords_from_heatmap(heatmap, use_weighted_avg=True)
-            
+
             if frame_idx < warmup_frames:
                 if heatmap_conf >= heatmap_min_confidence:
                     warmup_coords.append(raw_coords.copy())
@@ -244,18 +281,25 @@ def track_video(
                 # Scale down movement to max_speed
                 movement = movement * (max_speed / movement_norm)
                 raw_coords = prev_refined_coords + movement
-        
+
+        # Apply EMA smoothing to coordinates
+        if prev_refined_coords is not None and smoothing < 1.0:
+            raw_coords = smoothing * raw_coords + (1.0 - smoothing) * prev_refined_coords
+
         raw_coords = np.clip(raw_coords, 0.0, 1.0)
-        
+
         # Update previous refined coordinates for next iteration
         prev_refined_coords = raw_coords.copy()
         
         norm_x, norm_y = raw_coords
         pred_x = norm_x * width
         pred_y = norm_y * height
-        
-        if zone_polygons:
-            zone_probs = get_zone_probabilities(pred_x, pred_y, zone_polygons, tube_max_distance=20.0, soft_boundary=True, normalize=True)
+
+        # Initialize zone_probs for later display
+        zone_probs = {}
+
+        if enable_zones and zone_polygons:
+            zone_probs = get_zone_probabilities(pred_x, pred_y, zone_polygons, tube_max_distance=60.0, soft_boundary=True, normalize=True)
             if zone_probs:
                 new_zone = max(zone_probs, key=zone_probs.get)
                 pred_confidence = zone_probs[new_zone]
@@ -268,12 +312,13 @@ def track_video(
         
         if current_zone is not None and new_zone is not None:
             if not is_valid_transition(current_zone, new_zone, zone_graph):
+                # Invalid transition - check if there are valid alternatives with better confidence
                 if zone_polygons:
                     valid_alternatives = []
                     for alt_zone, alt_prob in zone_probs.items():
-                        if alt_prob > 0 and is_valid_transition(current_zone, alt_zone, zone_graph):
+                        if alt_prob > 0 and alt_zone != new_zone and is_valid_transition(current_zone, alt_zone, zone_graph):
                             valid_alternatives.append((alt_zone, alt_prob))
-                    
+
                     if valid_alternatives:
                         best_alt_zone = None
                         best_alt_prob = 0.0
@@ -281,21 +326,16 @@ def track_video(
                             if alt_prob > best_alt_prob:
                                 best_alt_prob = alt_prob
                                 best_alt_zone = alt_zone
-                        if best_alt_prob >= min_confidence:
+                        # Only use alternative if it has better confidence than detected zone
+                        if best_alt_prob >= min_confidence and best_alt_prob > pred_confidence:
                             new_zone = best_alt_zone
                             pred_confidence = best_alt_prob
-                        else:
-                            new_zone = current_zone
-                            pred_confidence = zone_probs.get(current_zone, 0.0)
-                    else:
-                        new_zone = current_zone
-                        pred_confidence = zone_probs.get(current_zone, 0.0)
+                        # else: keep new_zone as detected (will be checked against min_confidence_forbidden later)
         
         if current_zone is None:
             if frame_idx < warmup_frames:
-                if use_heatmap and len(warmup_coords) < min_warmup_confident_frames:
-                    pass
-                elif new_zone and pred_confidence >= min_confidence:
+                # Accumulate zone candidates during warmup (no heatmap confidence check)
+                if new_zone and pred_confidence >= min_confidence:
                     if new_zone not in warmup_zone_candidates:
                         warmup_zone_candidates[new_zone] = 0
                     warmup_zone_candidates[new_zone] += 1
@@ -314,42 +354,98 @@ def track_video(
                             current_zone = best_candidate[0]
                             frames_in_current_zone = warmup_frames
                         else:
-                            required_conf = max(min_confidence, 0.6) if use_heatmap else min_confidence
-                            if new_zone and pred_confidence >= required_conf:
+                            # Fallback: use configured min_confidence, not hardcoded 0.6
+                            if new_zone and pred_confidence >= min_confidence:
                                 current_zone = new_zone
                                 frames_in_current_zone = 1
             else:
-                if use_heatmap and len(warmup_coords) < min_warmup_confident_frames:
-                    pass
-                elif new_zone and pred_confidence >= min_confidence:
+                # After warmup: assign zone if confidence meets threshold (no warmup_coords check)
+                if new_zone and pred_confidence >= min_confidence:
                     current_zone = new_zone
                     frames_in_current_zone = 1
         elif new_zone == current_zone:
             frames_in_current_zone += 1
+            # Reset forbidden tracking when staying in same zone
+            forbidden_candidate_zone = None
+            forbidden_consecutive_frames = 0
         else:
             is_valid = is_valid_transition(current_zone, new_zone, zone_graph)
-            required_confidence = min_confidence_forbidden if not is_valid else min_confidence
-            
-            if pred_confidence >= required_confidence and frames_in_current_zone >= min_frames_same:
-                current_zone = new_zone
-                frames_in_current_zone = 1
+
+            if is_valid:
+                # Valid transition: standard confidence check
+                if pred_confidence >= min_confidence and frames_in_current_zone >= min_frames_same:
+                    current_zone = new_zone
+                    frames_in_current_zone = 1
+                    forbidden_candidate_zone = None
+                    forbidden_consecutive_frames = 0
+                else:
+                    frames_in_current_zone += 1
             else:
-                frames_in_current_zone += 1
+                # Forbidden transition: require consecutive frames above threshold
+                if pred_confidence >= min_confidence_forbidden:
+                    # Above threshold - check if same zone as previous frame
+                    if new_zone == forbidden_candidate_zone:
+                        forbidden_consecutive_frames += 1
+                    else:
+                        # Different zone - restart counter
+                        forbidden_candidate_zone = new_zone
+                        forbidden_consecutive_frames = 1
+
+                    # Allow transition if enough consecutive frames
+                    if forbidden_consecutive_frames >= min_frames_forbidden and frames_in_current_zone >= min_frames_same:
+                        current_zone = new_zone
+                        frames_in_current_zone = 1
+                        forbidden_candidate_zone = None
+                        forbidden_consecutive_frames = 0
+                    else:
+                        frames_in_current_zone += 1
+                else:
+                    # Below threshold - reset forbidden tracking
+                    forbidden_candidate_zone = None
+                    forbidden_consecutive_frames = 0
+                    frames_in_current_zone += 1
         
         pred_label = current_zone if current_zone else "Unknown"
-        
+
         pixel_x = int(norm_x * width)
         pixel_y = int(norm_y * height)
-        result_row = {
-            'frame': frame_idx,
-            'zone': pred_label,
-            'x': pixel_x,
-            'y': pixel_y
-        }
-        
+
+        # Calculate tube-pinned coordinates and position if in a tube (only if zones enabled)
+        tube_position = None
+        pinned_x, pinned_y = pixel_x, pixel_y  # Default to smoothed coords
+        if enable_zones and pred_label.startswith('Tube_') and pred_label in zone_polygons:
+            tube_position = position_along_polyline((pixel_x, pixel_y), zone_polygons[pred_label])
+            pinned_pt = closest_point_on_polyline((pixel_x, pixel_y), zone_polygons[pred_label])
+            pinned_x, pinned_y = int(pinned_pt[0]), int(pinned_pt[1])
+
+        # Get likelihood/confidence for this frame
+        # Use zone confidence if available, otherwise heatmap confidence (None for non-heatmap models)
+        if enable_zones:
+            likelihood = pred_confidence if pred_confidence > 0 else heatmap_conf
+        else:
+            likelihood = heatmap_conf
+
+        # Construct result row based on whether zones are enabled
+        if enable_zones:
+            result_row = {
+                'x': pixel_x,
+                'y': pixel_y,
+                'x_pinned': pinned_x,
+                'y_pinned': pinned_y,
+                'likelihood': likelihood,
+                'zone': pred_label,
+                'tube_position': tube_position,
+            }
+        else:
+            result_row = {
+                'x': pixel_x,
+                'y': pixel_y,
+                'likelihood': likelihood if likelihood is not None else 0.0,
+            }
+
         results.append(result_row)
-        
-        if pred_label in zone_polygons:
+
+        if enable_zones and pred_label in zone_polygons:
             points = zone_polygons[pred_label]
             zone_color = (100, 200, 100)
             overlay_alpha = 0.3
@@ -366,11 +462,78 @@ def track_video(
                 cv2.circle(frame, tuple(closest_pt), 18, (0, 255, 0), -1)
         
         cv2.circle(frame, (pixel_x, pixel_y), 8, (0, 0, 255), -1)
-        
+
         cv2.putText(frame, f"Frame: {frame_idx}", (20, height - 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        
-        out_video.write(frame)
+
+        # Display zone information with confidences (only if zones enabled)
+        y_offset = 30
+
+        if enable_zones:
+            # Find highest probability zone for comparison
+            detected_zone = None
+            detected_conf = 0.0
+            if zone_probs:
+                detected_zone = max(zone_probs, key=zone_probs.get)
+                detected_conf = zone_probs[detected_zone]
+
+            # Show tracked vs detected zone
+            if detected_zone and detected_zone != pred_label:
+                # MISMATCH: tracking different zone than detected
+                cv2.putText(frame, f"Tracking: {pred_label} | Detected: {detected_zone}", (20, y_offset),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)  # Orange warning
+            else:
+                cv2.putText(frame, f"Zone: {pred_label}", (20, y_offset),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)  # Green OK
+            y_offset += 25
+
+        # Show all zone candidates with their probabilities
+        if enable_zones and zone_probs:
+            cv2.putText(frame, "Candidates:", (20, y_offset),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+            y_offset += 18
+
+            sorted_zones = sorted(zone_probs.items(), key=lambda x: x[1], reverse=True)
+            displayed = 0
+            for zone_name, zone_prob in sorted_zones:
+                if zone_prob > 0.001 and displayed < 6:
+                    # Color code: green=tracked, orange=highest but not tracked, gray=other
+                    if zone_name == pred_label:
+                        color = (0, 255, 0)  # Green: current tracked zone
+                    elif zone_name == detected_zone:
+                        color = (0, 165, 255)  # Orange: highest prob but not tracked
+                    else:
+                        color = (180, 180, 180)  # Gray: other
+
+                    cv2.putText(frame, f"  {zone_name}: {zone_prob:.3f}", (20, y_offset),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+                    y_offset += 18
+                    displayed += 1
+
+        # Create output frame (side-by-side with heatmap if in heatmap mode)
+        if use_heatmap:
+            # Render heatmap as colored image (raw output for debugging)
+            heatmap_vis = (heatmap / (heatmap.max() + 1e-8) * 255).astype(np.uint8)
+
+            # Scale up with nearest neighbor to show actual grid cells
+            heatmap_vis = cv2.resize(heatmap_vis, (width, height), interpolation=cv2.INTER_NEAREST)
+
+            heatmap_colored = cv2.applyColorMap(heatmap_vis, cv2.COLORMAP_JET)
+
+            # Draw prediction marker on heatmap
+            cv2.circle(heatmap_colored, (pixel_x, pixel_y), 8, (255, 255, 255), 2)
+
+            # Add label
+            cv2.putText(heatmap_colored, "Heatmap", (20, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            cv2.putText(heatmap_colored, f"Conf: {heatmap_conf:.3f}" if heatmap_conf else "Conf: N/A",
+                        (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+            # Combine side by side
+            combined_frame = np.hstack([frame, heatmap_colored])
+            out_video.write(combined_frame)
+        else:
+            out_video.write(frame)
         
         pbar.update(1)
         prev_gray = curr_gray
@@ -380,9 +543,25 @@ def track_video(
     cap.release()
     out_video.release()
     
-    # Save CSV
-    df = pd.DataFrame(results)
-    df.to_csv(output_csv, index=False)
+    # Save CSV in DLC format with multi-level header
+    # Format: scorer, bodyparts, coords as first 3 rows, then data
+    scorer = "3DMazeTrack"
+    bodypart = "LED"
+
+    # Column list depends on whether zones are enabled
+    if enable_zones:
+        columns = ['x', 'y', 'x_pinned', 'y_pinned', 'likelihood', 'zone', 'tube_position']
+    else:
+        columns = ['x', 'y', 'likelihood']
+
+    # Create multi-index columns
+    header_tuples = [(scorer, bodypart, col) for col in columns]
+    multi_index = pd.MultiIndex.from_tuples(header_tuples, names=['scorer', 'bodyparts', 'coords'])
+
+    df = pd.DataFrame(results, columns=columns)
+    df.columns = multi_index
+
+    df.to_csv(output_csv)
     logger.info("Tracking complete!")
     logger.info(f"  - Video saved to: {output_video}")
     logger.info(f"  - CSV saved to: {output_csv}")
