@@ -1,7 +1,9 @@
 """Annotation tool for creating training data."""
 import cv2
 import pandas as pd
+import numpy as np
 import random
+from collections import defaultdict
 from . import logger
 
 
@@ -44,6 +46,19 @@ def annotate_video(
 
     cap = cv2.VideoCapture(video_path)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    # Spatial stratification: track coverage in grid cells
+    grid_size = 4  # 4x4 grid for spatial coverage
+    grid_counts = defaultdict(int)
+
+    # Load existing annotations into grid
+    for event in existing_events:
+        x, y = event['x'], event['y']
+        grid_x = min(int(x / frame_width * grid_size), grid_size - 1)
+        grid_y = min(int(y / frame_height * grid_size), grid_size - 1)
+        grid_counts[(grid_x, grid_y)] += 1
 
     # Pick random frame indices (excluding already annotated frames)
     available_frames = [f for f in range(total_frames) if f not in existing_frames]
@@ -73,11 +88,38 @@ def annotate_video(
         
         while True:
             display_frame = frame.copy()
-            
+
             # Show crosshair if clicked
             if current_click:
                 cv2.circle(display_frame, current_click, 5, (0, 0, 255), -1)
-            
+
+            # Draw spatial coverage grid overlay (top-right corner)
+            grid_viz_size = 120
+            grid_cell_size = grid_viz_size // grid_size
+            grid_viz = np.zeros((grid_viz_size, grid_viz_size, 3), dtype=np.uint8)
+
+            # Color cells based on coverage
+            max_count = max(grid_counts.values()) if grid_counts else 1
+            for gx in range(grid_size):
+                for gy in range(grid_size):
+                    count = grid_counts.get((gx, gy), 0)
+                    intensity = int(255 * min(count / max(max_count, 5), 1.0))  # Cap at 5 samples
+                    color = (0, intensity, 0)  # Green for coverage
+                    x1 = gx * grid_cell_size
+                    y1 = gy * grid_cell_size
+                    x2 = x1 + grid_cell_size
+                    y2 = y1 + grid_cell_size
+                    cv2.rectangle(grid_viz, (x1, y1), (x2, y2), color, -1)
+                    cv2.rectangle(grid_viz, (x1, y1), (x2, y2), (100, 100, 100), 1)
+
+            # Overlay grid visualization
+            x_offset = frame.shape[1] - grid_viz_size - 10
+            y_offset_viz = 10
+            display_frame[y_offset_viz:y_offset_viz + grid_viz_size,
+                         x_offset:x_offset + grid_viz_size] = grid_viz
+            cv2.putText(display_frame, "Coverage", (x_offset, y_offset_viz - 5),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+
             # Status text
             status_text = []
             if current_click:
@@ -85,10 +127,10 @@ def annotate_video(
                 status_text.append("Press ENTER to confirm")
             else:
                 status_text.append("Click to set position")
-            
+
             cv2.putText(display_frame, f"Frame: {idx}", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            
+
             y_offset = 60
             for i, text in enumerate(status_text):
                 cv2.putText(display_frame, text, (10, y_offset + i * 30),
@@ -112,13 +154,20 @@ def annotate_video(
                 if current_click is None:
                     logger.info(">> Please CLICK the mouse position first!")
                     continue
-                
+
+                x, y = current_click
                 events.append({
                     'frame_idx': idx,
-                    'x': current_click[0],
-                    'y': current_click[1]
+                    'x': x,
+                    'y': y
                 })
-                logger.info(f"Saved: {current_click}")
+
+                # Update grid coverage
+                grid_x = min(int(x / frame_width * grid_size), grid_size - 1)
+                grid_y = min(int(y / frame_height * grid_size), grid_size - 1)
+                grid_counts[(grid_x, grid_y)] += 1
+
+                logger.info(f"Saved: {current_click} (grid cell [{grid_x}, {grid_y}])")
                 break
     
     # Combine with existing annotations
@@ -133,6 +182,33 @@ def annotate_video(
         logger.info(f"Saved {len(events)} new annotations (total: {len(all_events)}) to {output_csv}")
     else:
         logger.info(f"Saved {len(events)} annotations to {output_csv}")
+
+    # Report spatial coverage statistics
+    logger.info("\n--- Spatial Coverage Report ---")
+    total_cells = grid_size * grid_size
+    covered_cells = len(grid_counts)
+    logger.info(f"Grid cells covered: {covered_cells}/{total_cells} ({100*covered_cells/total_cells:.1f}%)")
+
+    # Show coverage per cell
+    logger.info("Samples per grid cell:")
+    for gy in range(grid_size):
+        row_str = ""
+        for gx in range(grid_size):
+            count = grid_counts.get((gx, gy), 0)
+            row_str += f"{count:3d} "
+        logger.info(f"  Row {gy}: {row_str}")
+
+    # Identify undersampled cells
+    min_samples = 3
+    undersampled = [(gx, gy) for gx in range(grid_size) for gy in range(grid_size)
+                    if grid_counts.get((gx, gy), 0) < min_samples]
+    if undersampled:
+        logger.info(f"\n⚠ {len(undersampled)} cells have < {min_samples} samples (may cause center bias)")
+        logger.info("  Consider annotating more frames with mouse in these areas:")
+        for gx, gy in undersampled[:5]:  # Show first 5
+            x_range = f"{int(gx*frame_width/grid_size)}-{int((gx+1)*frame_width/grid_size)}"
+            y_range = f"{int(gy*frame_height/grid_size)}-{int((gy+1)*frame_height/grid_size)}"
+            logger.info(f"    Cell [{gx},{gy}]: x={x_range}, y={y_range} ({grid_counts.get((gx, gy), 0)} samples)")
 
     cap.release()
     cv2.destroyAllWindows()

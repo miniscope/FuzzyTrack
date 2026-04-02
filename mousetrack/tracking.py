@@ -224,12 +224,9 @@ def track_video(
     forbidden_candidate_zone = None
     forbidden_consecutive_frames = 0
     
-    # Warm-up period for stable initialization
-    warmup_frames = 30 if use_heatmap else 5  # Much longer warm-up for heatmap
+    # Warm-up period for zone initialization (only used if zones enabled)
+    warmup_frames = 30 if use_heatmap else 5
     warmup_zone_candidates = {}  # Track zone candidates during warm-up
-    warmup_coords = []  # Track coordinates during warm-up for smoothing
-    # heatmap_min_confidence is passed as parameter
-    min_warmup_confident_frames = 10 if use_heatmap else 3  # Need at least N confident predictions before starting
     
     results = []
     frame_idx = 0
@@ -260,15 +257,6 @@ def track_video(
             # Model outputs heatmap, extract coordinates using weighted average for stability
             heatmap = model_out[0, 0].cpu().numpy()  # (H, W)
             raw_coords, heatmap_conf = extract_coords_from_heatmap(heatmap, use_weighted_avg=True)
-
-            if frame_idx < warmup_frames:
-                if heatmap_conf >= heatmap_min_confidence:
-                    warmup_coords.append(raw_coords.copy())
-                    raw_coords = np.mean(warmup_coords, axis=0)
-                elif len(warmup_coords) >= min_warmup_confident_frames:
-                    raw_coords = np.mean(warmup_coords, axis=0)
-                elif len(warmup_coords) > 0:
-                    raw_coords = warmup_coords[-1].copy()
         else:
             # Model outputs coordinates directly
             raw_coords = model_out[0].cpu().numpy()
@@ -512,13 +500,20 @@ def track_video(
 
         # Create output frame (side-by-side with heatmap if in heatmap mode)
         if use_heatmap:
-            # Render heatmap as colored image (raw output for debugging)
-            heatmap_vis = (heatmap / (heatmap.max() + 1e-8) * 255).astype(np.uint8)
+            # Render heatmap: clamp negatives, threshold to remove noise, normalize
+            heatmap_clamped = np.maximum(heatmap, 0.0)
+
+            # Threshold at 90th percentile to remove low-confidence noise
+            threshold = np.percentile(heatmap_clamped, 90)
+            heatmap_thresholded = np.where(heatmap_clamped >= threshold, heatmap_clamped, 0.0)
+
+            # Normalize to [0, 255]
+            heatmap_vis = (heatmap_thresholded / (heatmap_clamped.max() + 1e-8) * 255).astype(np.uint8)
 
             # Scale up with nearest neighbor to show actual grid cells
             heatmap_vis = cv2.resize(heatmap_vis, (width, height), interpolation=cv2.INTER_NEAREST)
 
-            heatmap_colored = cv2.applyColorMap(heatmap_vis, cv2.COLORMAP_JET)
+            heatmap_colored = cv2.applyColorMap(heatmap_vis, cv2.COLORMAP_INFERNO)
 
             # Draw prediction marker on heatmap
             cv2.circle(heatmap_colored, (pixel_x, pixel_y), 8, (255, 255, 255), 2)

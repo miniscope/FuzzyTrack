@@ -176,10 +176,29 @@ class FrameDataset(Dataset):
             image = np.fliplr(image).copy()
             norm_x = 1.0 - norm_x
 
-        # Small random translation (-5% to +5%)
+        # Vertical flip (50% chance)
         if random.random() > 0.5:
-            tx = random.uniform(-0.05, 0.05)
-            ty = random.uniform(-0.05, 0.05)
+            image = np.flipud(image).copy()
+            norm_y = 1.0 - norm_y
+
+        # Random scaling (0.85-1.15x) - helps with center bias
+        if random.random() > 0.5:
+            scale = random.uniform(0.85, 1.15)
+            center = (w // 2, h // 2)
+            M = cv2.getRotationMatrix2D(center, 0, scale)
+            image = cv2.warpAffine(image, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
+
+            # Scale coordinates around center
+            cx, cy = 0.5, 0.5
+            dx = (norm_x - cx) * scale
+            dy = (norm_y - cy) * scale
+            norm_x = np.clip(cx + dx, 0, 1)
+            norm_y = np.clip(cy + dy, 0, 1)
+
+        # Random translation (-15% to +15%) - increased for better edge coverage
+        if random.random() > 0.5:
+            tx = random.uniform(-0.15, 0.15)
+            ty = random.uniform(-0.15, 0.15)
 
             # Translate image
             M = np.float32([[1, 0, tx * w], [0, 1, ty * h]])
