@@ -32,15 +32,13 @@ training:
 
 tracking:
   smoothing: 0.2          # EMA smoothing (0.0-1.0, lower=smoother, 1.0=no smoothing)
-  min_confidence: 0.4     # Min confidence for valid zone transitions
-  min_confidence_forbidden: 0.9
-  min_frames_same: 1
-  min_frames_forbidden: 10
   enable_warmup: true
   warmup_frames_heatmap: 30
   warmup_frames_regression: 5
   min_warmup_confident_frames_heatmap: 10
   min_warmup_confident_frames_regression: 3
+  output_scorer: 3DMazeTrack
+  output_bodypart: LED
   heatmap_min_confidence: 0.4
   # max_speed: 0.1        # Uncomment to limit movement speed
 ```
@@ -49,15 +47,10 @@ The `--config` option is required for training and tracking. Most training and t
 
 ## Workflow
 
-### 1. Define Zones (one-time setup)
-```bash
-mousetrack define-zones --video assets/video.mp4
-```
-**Generates:** `config/zone_polygons.yaml` (zone boundaries)
+FuzzyTrack is the canonical source for raw DLC-style tracking output (`x`, `y`, `likelihood`).
+Maze zone detection and 1D serialization are intentionally handled in `placecell`.
 
-**Note**: You also need `config/zone_graph.yaml` with zone connections. Create it manually or copy from an example.
-
-### 2. Annotate Video
+### 1. Annotate Video
 ```bash
 mousetrack annotate --video assets/video.mp4
 ```
@@ -65,7 +58,7 @@ Annotates sampled frames with mouse coordinates. Output is written automatically
 
 **Generates:** `assets/video.csv` (training annotations)
 
-### 3. Train CNN (coordinate prediction)
+### 2. Train CNN (coordinate prediction)
 ```bash
 # Single video
 mousetrack train-cnn -c config/model_config.yaml -v assets/video.mp4 -a assets/video.csv
@@ -82,7 +75,7 @@ mousetrack train-cnn -c config/model_config.yaml --data-root assets/dataset
 - `models/mouse_cnn_heatmap.pth` or `models/mouse_cnn_regression.pth` (trained model)
 - `runs/mouse_tracker_{heatmap|regression}_{timestamp}/` (TensorBoard logs)
 
-### 4. Run Tracking
+### 3. Run Tracking
 ```bash
 # Basic tracking
 mousetrack track -c config/model_config.yaml -v assets/video.mp4
@@ -92,41 +85,47 @@ mousetrack track -c config/model_config.yaml \
   -v assets/video.mp4 \
   --cnn-model models/mouse_cnn_heatmap.pth \
   --output output/tracking
-
-# Enable zone classification during tracking
-mousetrack track -c config/model_config.yaml \
-  -v assets/video.mp4 \
-  --enable-zones
 ```
 **Generates:**
 - `output/tracking_{heatmap|regression}_{timestamp}.csv` (tracking data in DLC format)
 - `output/tracking_{heatmap|regression}_{timestamp}.mp4` (annotated video)
 
-When zone classification is enabled, the tracking CSV uses a DLC-style 3-level header and includes:
+Tracking CSV schema:
 - `x`, `y`, `likelihood`
-- `x_pinned`, `y_pinned`
-- `zone`
-- `arm_position`
+- DLC header defaults are `scorer=3DMazeTrack` and `bodypart=LED`
+- both header values are configurable via `tracking.output_scorer` and `tracking.output_bodypart`
 
-### 5. Detect Zones from Existing Tracking CSV
+## Output Contract
+
+- Output CSVs use a DLC-style 3-level header: `scorer`, `bodyparts`, `coords`
+- The tracked coordinate columns are always `x`, `y`, and `likelihood`
+- The first processed frame is included in the output; because tracking uses frame differences, frame 0 is effectively a zero-motion initialization frame
+- Heatmap models report an entropy-based `likelihood`; regression models currently write `0.0` in that column
+- The tracking video is a QC artifact; the CSV is the canonical output for downstream analysis
+
+## Placecell Integration
+
+Recommended release workflow:
+
 ```bash
-mousetrack detect-zones \
-  --input-csv output/tracking_heatmap_20260402_120000.csv \
-  --output-csv output/tracking_with_zones.csv \
-  --zone-polygons config/zone_polygons.yaml \
-  --zone-graph config/zone_graph.yaml \
-  --config config/model_config.yaml
+# 1. Track in FuzzyTrack
+mousetrack track -c config/model_config.yaml -v assets/video.mp4
+
+# 2. In placecell data config:
+# behavior_position: output/tracking_heatmap_YYYYMMDD_HHMMSS.csv
+# bodypart: LED
+#
+# 3. Run zone detection and 1D analysis in placecell
 ```
-Adds zone labels to an existing tracking CSV using the configured hysteresis thresholds.
-The output remains DLC-style and adds `x_pinned`, `y_pinned`, `zone`, and `arm_position`.
+
+This keeps tracking and analysis responsibilities separate and avoids divergence between two independent zone-detection implementations.
 
 ## Pipeline Summary
 
 ```
-Video → CNN → EMA Smoothing → Geometric Classification → Zones
+Video -> CNN -> EMA Smoothing -> DLC CSV
 ```
 
 - **CNN**: Finds mouse coordinates from frames (supports direct regression or heatmap)
-- **EMA Smoothing**: Exponential moving average reduces jitter from noise/scattering
-- **Geometric Classification**: Classifies zones using proximity to polygons/polylines
-- **Hysteresis**: Prevents rapid zone switching for stability
+- **EMA Smoothing**: Reduces jitter from noise/scattering
+- **DLC CSV**: Exports raw coordinates for downstream analysis in `placecell`
