@@ -17,14 +17,12 @@ training:
 
 tracking:
   smoothing: 0.2          # EMA smoothing (0.0-1.0, lower=smoother, 1.0=no smoothing)
-  min_confidence: 0.4     # Min confidence for valid zone transitions
-  min_confidence_forbidden: 0.9  # Min confidence for forbidden transitions
-  min_frames_same: 1      # Min frames in zone before switching
-  min_frames_forbidden: 10  # Min consecutive frames above threshold for forbidden transitions
   enable_warmup: true
   warmup_frames_heatmap: 30
   warmup_frames_regression: 5
   min_warmup_confident_frames_heatmap: 10
   min_warmup_confident_frames_regression: 3
+  output_scorer: 3DMazeTrack
+  output_bodypart: LED
   heatmap_min_confidence: 0.4  # Min heatmap confidence during warmup (entropy-based, 0=uniform, 1=peaked)
   # max_speed: 0.1        # Uncomment to limit movement speed (normalized 0-1 per frame)

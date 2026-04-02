@@ -179,7 +179,8 @@ def annotate_video(
 
     # Save
     df = pd.DataFrame(all_events)
-    df = df.sort_values('frame_idx')  # Sort by frame index
+    if not df.empty:
+        df = df.sort_values('frame_idx')
     df.to_csv(output_csv, index=False)
 
     if existing_events:

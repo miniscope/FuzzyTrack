@@ -27,34 +27,39 @@ DEFAULT_CONFIG = {
     },
     'tracking': {
         'smoothing': 0.5,
-        'min_confidence': 0.5,
-        'min_confidence_forbidden': 0.8,
-        'min_frames_same': 1,
-        'min_frames_forbidden': 3,
         'enable_warmup': True,
         'warmup_frames_heatmap': 30,
         'warmup_frames_regression': 5,
         'min_warmup_confident_frames_heatmap': 10,
         'min_warmup_confident_frames_regression': 3,
+        'output_scorer': '3DMazeTrack',
+        'output_bodypart': 'LED',
+        'heatmap_min_confidence': 0.05,
         'max_speed': None,
-        'enable_zones': False,
     },
 }
 
 
+def _deep_merge_dict(base: dict, override: dict) -> dict:
+    for key, val in override.items():
+        if isinstance(base.get(key), dict) and isinstance(val, dict):
+            _deep_merge_dict(base[key], val)
+        else:
+            base[key] = val
+    return base
+
+
 def load_config(config_path: str = None) -> dict:
-    """Load configuration from YAML file, merged with defaults."""
-    config = DEFAULT_CONFIG.copy()
+    """Load configuration from YAML file, recursively merged with defaults."""
+    config = {
+        section: values.copy() if isinstance(values, dict) else values
+        for section, values in DEFAULT_CONFIG.items()
+    }
 
     if config_path and os.path.exists(config_path):
         with open(config_path, 'r') as f:
             user_config = yaml.safe_load(f) or {}
 
-        # Deep merge user config into defaults
-        for section, values in user_config.items():
-            if section in config and isinstance(values, dict):
-                config[section] = {**config[section], **values}
-            else:
-                config[section] = values
+        _deep_merge_dict(config, user_config)
 
     return config
