@@ -126,7 +126,7 @@ def track(video, config, cnn_model, output):
     warmup_frames_regression = cfg['tracking'].get('warmup_frames_regression', 5)
     min_warmup_confident_frames_heatmap = cfg['tracking'].get('min_warmup_confident_frames_heatmap', 10)
     min_warmup_confident_frames_regression = cfg['tracking'].get('min_warmup_confident_frames_regression', 3)
-    output_scorer = cfg['tracking'].get('output_scorer', '3DMazeTrack')
+    output_scorer = cfg['tracking'].get('output_scorer', 'FuzzyTrack')
     output_bodypart = cfg['tracking'].get('output_bodypart', 'LED')
     max_speed = cfg['tracking'].get('max_speed')
     heatmap_min_confidence = cfg['tracking'].get('heatmap_min_confidence', 0.05)

@@ -1,4 +1,4 @@
-"""Mouse tracking package for 3D maze tracking."""
+"""FuzzyTrack package."""
 import logging
 
 __version__ = "0.1.0"

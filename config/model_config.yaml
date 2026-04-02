@@ -22,7 +22,7 @@ tracking:
   warmup_frames_regression: 5
   min_warmup_confident_frames_heatmap: 10
   min_warmup_confident_frames_regression: 3
-  output_scorer: 3DMazeTrack
+  output_scorer: FuzzyTrack
   output_bodypart: LED
   heatmap_min_confidence: 0.4  # Min heatmap confidence during warmup (entropy-based, 0=uniform, 1=peaked)
   # max_speed: 0.1        # Uncomment to limit movement speed (normalized 0-1 per frame)

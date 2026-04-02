@@ -210,7 +210,7 @@ def track_video(
     warmup_frames_regression: int = 5,
     min_warmup_confident_frames_heatmap: int = 10,
     min_warmup_confident_frames_regression: int = 3,
-    output_scorer: str = "3DMazeTrack",
+    output_scorer: str = "FuzzyTrack",
     output_bodypart: str = "LED",
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

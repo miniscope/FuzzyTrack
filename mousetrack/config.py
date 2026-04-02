@@ -32,7 +32,7 @@ DEFAULT_CONFIG = {
         'warmup_frames_regression': 5,
         'min_warmup_confident_frames_heatmap': 10,
         'min_warmup_confident_frames_regression': 3,
-        'output_scorer': '3DMazeTrack',
+        'output_scorer': 'FuzzyTrack',
         'output_bodypart': 'LED',
         'heatmap_min_confidence': 0.05,
         'max_speed': None,

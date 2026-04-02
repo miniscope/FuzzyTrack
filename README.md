@@ -37,7 +37,7 @@ tracking:
   warmup_frames_regression: 5
   min_warmup_confident_frames_heatmap: 10
   min_warmup_confident_frames_regression: 3
-  output_scorer: 3DMazeTrack
+  output_scorer: FuzzyTrack
   output_bodypart: LED
   heatmap_min_confidence: 0.4
   # max_speed: 0.1        # Uncomment to limit movement speed
@@ -92,7 +92,7 @@ mousetrack track -c config/model_config.yaml \
 
 Tracking CSV schema:
 - `x`, `y`, `likelihood`
-- DLC header defaults are `scorer=3DMazeTrack` and `bodypart=LED`
+- DLC header defaults are `scorer=FuzzyTrack` and `bodypart=LED`
 - both header values are configurable via `tracking.output_scorer` and `tracking.output_bodypart`
 
 ## Output Contract
