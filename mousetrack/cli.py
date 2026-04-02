@@ -131,6 +131,11 @@ def track(video, config, cnn_model, output, enable_zones, zone_polygons, zone_gr
     min_confidence_forbidden = cfg['tracking']['min_confidence_forbidden']
     min_frames_same = cfg['tracking']['min_frames_same']
     min_frames_forbidden = cfg['tracking'].get('min_frames_forbidden', 3)
+    enable_warmup = cfg['tracking'].get('enable_warmup', True)
+    warmup_frames_heatmap = cfg['tracking'].get('warmup_frames_heatmap', 30)
+    warmup_frames_regression = cfg['tracking'].get('warmup_frames_regression', 5)
+    min_warmup_confident_frames_heatmap = cfg['tracking'].get('min_warmup_confident_frames_heatmap', 10)
+    min_warmup_confident_frames_regression = cfg['tracking'].get('min_warmup_confident_frames_regression', 3)
     max_speed = cfg['tracking'].get('max_speed')
     heatmap_min_confidence = cfg['tracking'].get('heatmap_min_confidence', 0.05)
 
@@ -174,6 +179,11 @@ def track(video, config, cnn_model, output, enable_zones, zone_polygons, zone_gr
         backbone=backbone,
         use_heatmap=use_heatmap,
         heatmap_min_confidence=heatmap_min_confidence,
+        enable_warmup=enable_warmup,
+        warmup_frames_heatmap=warmup_frames_heatmap,
+        warmup_frames_regression=warmup_frames_regression,
+        min_warmup_confident_frames_heatmap=min_warmup_confident_frames_heatmap,
+        min_warmup_confident_frames_regression=min_warmup_confident_frames_regression,
         enable_zones=enable_zones,
     )
 

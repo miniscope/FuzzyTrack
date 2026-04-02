@@ -148,6 +148,11 @@ def track_video(
     backbone: str = 'resnet18',
     use_heatmap: bool = True,
     heatmap_min_confidence: float = 0.05,
+    enable_warmup: bool = True,
+    warmup_frames_heatmap: int = 30,
+    warmup_frames_regression: int = 5,
+    min_warmup_confident_frames_heatmap: int = 10,
+    min_warmup_confident_frames_regression: int = 3,
     enable_zones: bool = False,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -232,11 +237,17 @@ def track_video(
     forbidden_consecutive_frames = 0
     
     # Warm-up period for stable initialization
-    warmup_frames = 30 if use_heatmap else 5  # Much longer warm-up for heatmap
+    warmup_frames = warmup_frames_heatmap if use_heatmap else warmup_frames_regression
+    if not enable_warmup:
+        warmup_frames = 0
     warmup_zone_candidates = {}  # Track zone candidates during warm-up
     warmup_coords = []  # Track coordinates during warm-up for smoothing
-    # heatmap_min_confidence is passed as parameter
-    min_warmup_confident_frames = 10 if use_heatmap else 3  # Need at least N confident predictions before starting
+    min_warmup_confident_frames = (
+        min_warmup_confident_frames_heatmap if use_heatmap
+        else min_warmup_confident_frames_regression
+    )
+    if not enable_warmup:
+        min_warmup_confident_frames = 0
     
     results = []
     frame_idx = 0
@@ -268,7 +279,7 @@ def track_video(
             heatmap = model_out[0, 0].cpu().numpy()  # (H, W)
             raw_coords, heatmap_conf = extract_coords_from_heatmap(heatmap, use_weighted_avg=True)
 
-            if frame_idx < warmup_frames:
+            if enable_warmup and frame_idx < warmup_frames:
                 if heatmap_conf >= heatmap_min_confidence:
                     warmup_coords.append(raw_coords.copy())
                     raw_coords = np.mean(warmup_coords, axis=0)
@@ -340,7 +351,7 @@ def track_video(
                         # else: keep new_zone as detected (will be checked against min_confidence_forbidden later)
         
         if current_zone is None:
-            if frame_idx < warmup_frames:
+            if enable_warmup and frame_idx < warmup_frames:
                 # Accumulate zone candidates during warmup (no heatmap confidence check)
                 if new_zone and pred_confidence >= min_confidence:
                     if new_zone not in warmup_zone_candidates:

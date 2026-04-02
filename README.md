@@ -36,6 +36,11 @@ tracking:
   min_confidence_forbidden: 0.9
   min_frames_same: 1
   min_frames_forbidden: 10
+  enable_warmup: true
+  warmup_frames_heatmap: 30
+  warmup_frames_regression: 5
+  min_warmup_confident_frames_heatmap: 10
+  min_warmup_confident_frames_regression: 3
   heatmap_min_confidence: 0.4
   # max_speed: 0.1        # Uncomment to limit movement speed
 ```
