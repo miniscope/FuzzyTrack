@@ -7,16 +7,16 @@ from typing import Dict, List
 from . import logger
 
 
-ZONES = ['Room_1', 'Room_2', 'Room_3', 'Tube_1', 'Tube_2', 'Tube_3', 'Tube_4']
+ZONES = ['Room_1', 'Room_2', 'Room_3', 'Arm_1', 'Arm_2', 'Arm_3', 'Arm_4']
 
 ZONE_COLORS = {
     'Room_1': (100, 200, 100),
     'Room_2': (100, 200, 200),
     'Room_3': (200, 200, 100),
-    'Tube_1': (100, 100, 255),
-    'Tube_2': (255, 100, 100),
-    'Tube_3': (100, 255, 255),
-    'Tube_4': (255, 200, 100),
+    'Arm_1': (100, 100, 255),
+    'Arm_2': (255, 100, 100),
+    'Arm_3': (100, 255, 255),
+    'Arm_4': (255, 200, 100),
 }
 
 
@@ -59,7 +59,7 @@ def define_zones(
                 if zone.startswith('Room_') and len(poly) >= 3:
                     cv2.fillPoly(display_frame, [poly_array], color)
                     cv2.polylines(display_frame, [poly_array], True, color, 2)
-                elif zone.startswith('Tube_'):
+                elif zone.startswith('Arm_'):
                     cv2.polylines(display_frame, [poly_array], False, color, 2)
         
         # Draw current polygon/polyline being defined
@@ -130,7 +130,7 @@ def define_zones(
             min_points = 3 if current_zone.startswith('Room_') else 2
             if len(current_polygon) >= min_points:
                 final_poly = current_polygon.copy()
-                if current_zone.startswith('Tube_') and len(final_poly) > 1:
+                if current_zone.startswith('Arm_') and len(final_poly) > 1:
                     if final_poly[-1] == final_poly[0]:
                         final_poly = final_poly[:-1]
                 polygons[current_zone] = final_poly
@@ -168,7 +168,7 @@ def define_zones(
                 min_points = 3 if zone.startswith('Room_') else 2
                 if len(poly) >= min_points:
                     final_poly = poly.copy()
-                    if zone.startswith('Tube_') and len(final_poly) > 1:
+                    if zone.startswith('Arm_') and len(final_poly) > 1:
                         if final_poly[-1] == final_poly[0]:
                             final_poly = final_poly[:-1]
                     save_data[zone] = final_poly
@@ -191,7 +191,7 @@ def define_zones(
         min_points = 3 if zone.startswith('Room_') else 2
         if len(poly) >= min_points:
             final_poly = poly.copy()
-            if zone.startswith('Tube_') and len(final_poly) > 1:
+            if zone.startswith('Arm_') and len(final_poly) > 1:
                 if final_poly[-1] == final_poly[0]:
                     final_poly = final_poly[:-1]
             save_data[zone] = final_poly

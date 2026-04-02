@@ -3,7 +3,13 @@ import pandas as pd
 import numpy as np
 from typing import Dict, Optional
 
-from .geometry import load_zone_geometry, get_zone_probabilities, closest_point_on_polyline, position_along_polyline
+from .geometry import (
+    load_zone_geometry,
+    get_zone_probabilities,
+    closest_point_on_polyline,
+    position_along_polyline,
+    is_arm_zone,
+)
 from .tracking import load_zone_graph, is_valid_transition
 from . import logger
 
@@ -74,7 +80,7 @@ def detect_zones_from_csv(
     zones = []
     x_pinned_list = []
     y_pinned_list = []
-    tube_positions = []
+    arm_positions = []
 
     logger.info("Detecting zones...")
 
@@ -82,7 +88,7 @@ def detect_zones_from_csv(
         # Get zone probabilities
         zone_probs = get_zone_probabilities(
             x, y, zone_polygons,
-            tube_max_distance=60.0,
+            arm_max_distance=60.0,
             soft_boundary=True,
             normalize=True
         )
@@ -159,18 +165,18 @@ def detect_zones_from_csv(
 
         pred_label = current_zone if current_zone else "Unknown"
 
-        # Calculate tube-pinned coordinates
-        tube_position = None
+        # Calculate arm-pinned coordinates
+        arm_position = None
         pinned_x, pinned_y = x, y
-        if pred_label.startswith('Tube_') and pred_label in zone_polygons:
-            tube_position = position_along_polyline((x, y), zone_polygons[pred_label])
+        if is_arm_zone(pred_label) and pred_label in zone_polygons:
+            arm_position = position_along_polyline((x, y), zone_polygons[pred_label])
             pinned_pt = closest_point_on_polyline((x, y), zone_polygons[pred_label])
             pinned_x, pinned_y = float(pinned_pt[0]), float(pinned_pt[1])
 
         zones.append(pred_label)
         x_pinned_list.append(pinned_x)
         y_pinned_list.append(pinned_y)
-        tube_positions.append(tube_position)
+        arm_positions.append(arm_position)
 
     logger.info("Zone detection complete!")
 
@@ -181,7 +187,7 @@ def detect_zones_from_csv(
         (scorer, bodypart, 'x_pinned'): x_pinned_list,
         (scorer, bodypart, 'y_pinned'): y_pinned_list,
         (scorer, bodypart, 'zone'): zones,
-        (scorer, bodypart, 'tube_position'): tube_positions,
+        (scorer, bodypart, 'arm_position'): arm_positions,
     }
 
     # Include likelihood if it exists in input

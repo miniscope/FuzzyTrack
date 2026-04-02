@@ -10,7 +10,14 @@ from tqdm import tqdm
 
 from .models import MouseCNN, MouseHeatmapCNN
 from .config import IMG_SIZE, HEATMAP_SIZE
-from .geometry import load_zone_geometry, get_zone_probabilities, closest_point_on_polyline, position_along_polyline
+from .geometry import (
+    load_zone_geometry,
+    get_zone_probabilities,
+    closest_point_on_polyline,
+    position_along_polyline,
+    is_arm_zone,
+    is_room_zone,
+)
 from . import logger
 
 
@@ -33,7 +40,7 @@ def load_zone_graph(zone_graph_file: str = 'config/zone_graph.yaml') -> Dict:
                     connections = zone_data.get('connections', [])
                     for connected_zone in connections:
                         if connected_zone not in bidirectional_zones:
-                            zone_type = 'tube' if connected_zone.startswith('Tube_') else 'room'
+                            zone_type = 'arm' if is_arm_zone(connected_zone) else 'room'
                             bidirectional_zones[connected_zone] = {
                                 'type': zone_type,
                                 'connections': []
@@ -52,8 +59,8 @@ def is_valid_transition(current_zone: str, new_zone: str, zone_graph: Dict) -> b
         return True
     
     if not zone_graph:
-        if (current_zone.startswith('Tube_') and new_zone.startswith('Tube_')) or \
-           (current_zone.startswith('Room_') and new_zone.startswith('Room_')):
+        if (is_arm_zone(current_zone) and is_arm_zone(new_zone)) or \
+           (is_room_zone(current_zone) and is_room_zone(new_zone)):
             return False
         return True
     
@@ -299,7 +306,7 @@ def track_video(
         zone_probs = {}
 
         if enable_zones and zone_polygons:
-            zone_probs = get_zone_probabilities(pred_x, pred_y, zone_polygons, tube_max_distance=60.0, soft_boundary=True, normalize=True)
+            zone_probs = get_zone_probabilities(pred_x, pred_y, zone_polygons, arm_max_distance=60.0, soft_boundary=True, normalize=True)
             if zone_probs:
                 new_zone = max(zone_probs, key=zone_probs.get)
                 pred_confidence = zone_probs[new_zone]
@@ -410,11 +417,11 @@ def track_video(
         pixel_x = int(norm_x * width)
         pixel_y = int(norm_y * height)
 
-        # Calculate tube-pinned coordinates and position if in a tube (only if zones enabled)
-        tube_position = None
+        # Calculate arm-pinned coordinates and position if in an arm (only if zones enabled)
+        arm_position = None
         pinned_x, pinned_y = pixel_x, pixel_y  # Default to smoothed coords
-        if enable_zones and pred_label.startswith('Tube_') and pred_label in zone_polygons:
-            tube_position = position_along_polyline((pixel_x, pixel_y), zone_polygons[pred_label])
+        if enable_zones and is_arm_zone(pred_label) and pred_label in zone_polygons:
+            arm_position = position_along_polyline((pixel_x, pixel_y), zone_polygons[pred_label])
             pinned_pt = closest_point_on_polyline((pixel_x, pixel_y), zone_polygons[pred_label])
             pinned_x, pinned_y = int(pinned_pt[0]), int(pinned_pt[1])
 
@@ -434,7 +441,7 @@ def track_video(
                 'y_pinned': pinned_y,
                 'likelihood': likelihood,
                 'zone': pred_label,
-                'tube_position': tube_position,
+                'arm_position': arm_position,
             }
         else:
             result_row = {
@@ -449,13 +456,13 @@ def track_video(
             points = zone_polygons[pred_label]
             zone_color = (100, 200, 100)
             overlay_alpha = 0.3
-            if pred_label.startswith('Room_'):
+            if is_room_zone(pred_label):
                 polygon = np.array(points, dtype=np.int32)
                 overlay = frame.copy()
                 cv2.fillPoly(overlay, [polygon], zone_color)
                 cv2.addWeighted(overlay, overlay_alpha, frame, 1 - overlay_alpha, 0, frame)
                 cv2.polylines(frame, [polygon], True, zone_color, 3)
-            elif pred_label.startswith('Tube_'):
+            elif is_arm_zone(pred_label):
                 polyline = np.array(points, dtype=np.int32)
                 cv2.polylines(frame, [polyline], False, zone_color, 3)
                 closest_pt = closest_point_on_polyline((pixel_x, pixel_y), polyline)
@@ -550,7 +557,7 @@ def track_video(
 
     # Column list depends on whether zones are enabled
     if enable_zones:
-        columns = ['x', 'y', 'x_pinned', 'y_pinned', 'likelihood', 'zone', 'tube_position']
+        columns = ['x', 'y', 'x_pinned', 'y_pinned', 'likelihood', 'zone', 'arm_position']
     else:
         columns = ['x', 'y', 'likelihood']
 

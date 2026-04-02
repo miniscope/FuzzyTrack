@@ -208,7 +208,7 @@ def annotate(video, input_csv, num_samples):
     )
 
 
-@main.command()
+@main.command(name='define-zones')
 @click.option('--video', '-v', required=True, type=click.Path(exists=True), help='Video file')
 @click.option('--output', '-o', default='config/zone_polygons.yaml', type=click.Path(), help='Output YAML')
 def define_zones_cmd(video, output):

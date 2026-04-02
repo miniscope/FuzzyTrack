@@ -17,7 +17,7 @@ def point_in_polygon(point: Tuple[float, float], polygon: np.ndarray) -> bool:
 def distance_to_polyline(point: Tuple[float, float], polyline: np.ndarray, max_distance: float = 20.0) -> bool:
     """
     Check if a point is near a polyline (within max_distance pixels).
-    For tubes, we check distance to the center line.
+    For maze arms, we check distance to the center line.
     """
     # Find minimum distance to any segment of the polyline
     min_dist = float('inf')
@@ -180,11 +180,20 @@ def load_zone_geometry(zone_polygons_file: str = 'config/zone_polygons.yaml') ->
     return polygons
 
 
+def is_room_zone(zone_name: str) -> bool:
+    return zone_name.startswith('Room_')
+
+
+def is_arm_zone(zone_name: str) -> bool:
+    # Accept legacy Tube_* names so old configs still load, but export Arm_* downstream.
+    return zone_name.startswith('Arm_') or zone_name.startswith('Tube_')
+
+
 def classify_zone_geometric(
     x: float, 
     y: float, 
     zone_polygons: Dict[str, np.ndarray],
-    tube_max_distance: float = 20.0
+    arm_max_distance: float = 20.0
 ) -> Optional[str]:
     """
     Classify which zone a point (x, y) belongs to using geometry.
@@ -192,7 +201,7 @@ def classify_zone_geometric(
     Args:
         x, y: Coordinates in pixel space
         zone_polygons: Dictionary mapping zone names to polygon/polyline arrays
-        tube_max_distance: Maximum distance from polyline center for tube classification
+        arm_max_distance: Maximum distance from polyline center for arm classification
     
     Returns:
         Zone name if found, None otherwise
@@ -201,14 +210,14 @@ def classify_zone_geometric(
     
     # First check rooms (closed polygons) - these take priority
     for zone_name, polygon in zone_polygons.items():
-        if zone_name.startswith('Room_'):
+        if is_room_zone(zone_name):
             if point_in_polygon(point, polygon):
                 return zone_name
     
-    # Then check tubes (polylines) - check distance to center line
+    # Then check arms (polylines) - check distance to center line
     for zone_name, polyline in zone_polygons.items():
-        if zone_name.startswith('Tube_'):
-            if distance_to_polyline(point, polyline, tube_max_distance):
+        if is_arm_zone(zone_name):
+            if distance_to_polyline(point, polyline, arm_max_distance):
                 return zone_name
     
     return None  # Point doesn't match any zone
@@ -218,7 +227,7 @@ def get_zone_probabilities(
     x: float,
     y: float,
     zone_polygons: Dict[str, np.ndarray],
-    tube_max_distance: float = 40.0,
+    arm_max_distance: float = 40.0,
     soft_boundary: bool = True,
     normalize: bool = True
 ) -> Dict[str, float]:
@@ -226,21 +235,21 @@ def get_zone_probabilities(
     probs = {zone: 0.0 for zone in zone_polygons.keys()}
     
     for zone_name, polygon in zone_polygons.items():
-        if zone_name.startswith('Room_'):
+        if is_room_zone(zone_name):
             if point_in_polygon(point, polygon):
                 probs[zone_name] = 1.0
             elif soft_boundary:
                 dist = cv2.pointPolygonTest(polygon, point, True)
-                if dist > -tube_max_distance:
+                if dist > -arm_max_distance:
                     # Room probability decays much faster when outside
                     # Use squared decay: probability drops quickly as distance increases
                     # When dist is negative (outside), use faster decay
-                    normalized_dist = max(0.0, 1.0 + dist / tube_max_distance)  # 0 to 1
+                    normalized_dist = max(0.0, 1.0 + dist / arm_max_distance)  # 0 to 1
                     # Square it to make it decay faster: 1.0 at edge, 0.0 at max distance
                     probs[zone_name] = normalized_dist * normalized_dist
     
     for zone_name, polyline in zone_polygons.items():
-        if zone_name.startswith('Tube_'):
+        if is_arm_zone(zone_name):
             min_dist = float('inf')
             for i in range(len(polyline) - 1):
                 p1 = polyline[i]
@@ -248,11 +257,11 @@ def get_zone_probabilities(
                 dist = _point_to_segment_distance(point, p1, p2)
                 min_dist = min(min_dist, dist)
             
-            if min_dist <= tube_max_distance:
+            if min_dist <= arm_max_distance:
                 if soft_boundary:
                     # Use square root decay for softer, less peaky distribution
                     # sqrt makes distant zones retain more probability
-                    normalized_dist = min_dist / tube_max_distance
+                    normalized_dist = min_dist / arm_max_distance
                     probs[zone_name] = max(0.0, 1.0 - normalized_dist ** 0.5)
                 else:
                     probs[zone_name] = 1.0
