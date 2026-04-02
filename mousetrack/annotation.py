@@ -209,6 +209,5 @@ def annotate_video(
             x_range = f"{int(gx*frame_width/grid_size)}-{int((gx+1)*frame_width/grid_size)}"
             y_range = f"{int(gy*frame_height/grid_size)}-{int((gy+1)*frame_height/grid_size)}"
             logger.info(f"    Cell [{gx},{gy}]: x={x_range}, y={y_range} ({grid_counts.get((gx, gy), 0)} samples)")
-
     cap.release()
     cv2.destroyAllWindows()
