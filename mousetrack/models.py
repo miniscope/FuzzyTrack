@@ -2,7 +2,6 @@
 import torch
 import torch.nn as nn
 import torchvision.models as models
-from .config import HEATMAP_SIZE
 
 # Backbone configurations: (model_func, weights, feature_dim)
 BACKBONES = {

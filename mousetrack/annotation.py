@@ -1,10 +1,12 @@
 """Annotation tool for creating training data."""
 import cv2
-import pandas as pd
 import numpy as np
+import pandas as pd
 import random
 from collections import defaultdict
+
 from . import logger
+from .video import get_video_info
 
 
 def annotate_video(
@@ -38,21 +40,17 @@ def annotate_video(
     # Global state for mouse callback
     current_click = None
 
-    def mouse_callback(event, x, y, flags, param):
+    def mouse_callback(event, x, y, _flags, _param):
         nonlocal current_click
         if event == cv2.EVENT_LBUTTONDOWN:
             current_click = (x, y)
             logger.info(f"Clicked at: {current_click}")
 
+    video_info = get_video_info(video_path, require_square=True)
+    total_frames = video_info.total_frames
+    frame_width = video_info.width
+    frame_height = video_info.height
     cap = cv2.VideoCapture(video_path)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    if frame_width != frame_height:
-        logger.warning(
-            f"Warning: input video is non-square ({frame_width}x{frame_height}). "
-            "FuzzyTrack currently resizes frames to 224x224, which stretches aspect ratio."
-        )
 
     # Track spatial coverage of annotations to avoid center-biased labels.
     grid_size = 4

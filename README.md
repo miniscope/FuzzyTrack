@@ -43,6 +43,8 @@ tracking:
   # max_speed: 0.1        # Uncomment to limit movement speed
 ```
 
+Current limitation: only square videos are supported. Non-square inputs fail fast with a `NotImplementedError`.
+
 The `--config` option is required for training and tracking. Most training and tracking parameters are currently read from config rather than exposed as CLI flags.
 
 ## Workflow
@@ -102,6 +104,7 @@ Tracking CSV schema:
 - The first processed frame is included in the output; because tracking uses frame differences, frame 0 is effectively a zero-motion initialization frame
 - Heatmap models report an entropy-based `likelihood`; regression models currently write `0.0` in that column
 - The tracking video is a QC artifact; the CSV is the canonical output for downstream analysis
+- Model checkpoints now store training metadata and tracking validates backbone/mode compatibility when available
 
 ## Placecell Integration
 
