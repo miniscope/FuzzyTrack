@@ -10,6 +10,14 @@ from .tracking import track_video
 from .training import train_cnn as train_cnn_func
 
 
+def _raise_click_error(func, /, *args, **kwargs):
+    """Run a command handler and normalize common failures for CLI output."""
+    try:
+        return func(*args, **kwargs)
+    except (RuntimeError, ValueError, NotImplementedError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
 @click.group()
 def main():
     """FuzzyTrack CLI."""
@@ -88,7 +96,8 @@ def train_cnn(video, annotations, data_root, config, output):
     model_type = 'heatmap' if use_heatmap else 'regression'
     logdir = f'runs/fuzzytrack_{model_type}_{timestamp}'
 
-    train_cnn_func(
+    _raise_click_error(
+        train_cnn_func,
         video_paths=list(video),
         annotations_paths=list(annotations),
         output_path=output,
@@ -138,7 +147,9 @@ def track(video, config, cnn_model, output):
         cnn_model = f'models/mouse_cnn_{model_type}.pth'
 
     if output is not None:
-        if os.path.isdir(output):
+        output_path = Path(output)
+        looks_like_directory = output.endswith(os.sep) or output_path.suffix == ""
+        if os.path.isdir(output) or looks_like_directory:
             base_name = f'tracking_{model_type}_{timestamp}'
             output_video = os.path.join(output, f'{base_name}.mp4')
             output_csv = os.path.join(output, f'{base_name}.csv')
@@ -150,7 +161,8 @@ def track(video, config, cnn_model, output):
         output_video = f'output/tracking_{model_type}_{timestamp}.mp4'
         output_csv = f'output/tracking_{model_type}_{timestamp}.csv'
 
-    track_video(
+    _raise_click_error(
+        track_video,
         video_path=video,
         cnn_model_path=cnn_model,
         output_video=output_video,
@@ -183,7 +195,8 @@ def annotate(video, input_csv, num_samples):
         input_csv = str(csv_path)
         click.echo(f"Found existing annotations: {input_csv}")
 
-    annotate_video(
+    _raise_click_error(
+        annotate_video,
         video_path=video,
         output_csv=str(csv_path),
         num_samples=num_samples,

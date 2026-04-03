@@ -10,9 +10,11 @@ import pandas as pd
 import torch
 from tqdm import tqdm
 
+from .checkpoints import load_checkpoint
 from .config import IMG_SIZE
 from .models import MouseCNN, MouseHeatmapCNN
 from . import logger
+from .video import get_video_info
 
 
 @dataclass
@@ -63,6 +65,13 @@ def extract_coords_from_heatmap(heatmap: np.ndarray, use_weighted_avg: bool = Tr
 
 
 def _load_tracking_model(cnn_model_path: str, backbone: str, use_heatmap: bool, device: torch.device):
+    state_dict, _metadata = load_checkpoint(
+        cnn_model_path,
+        device=device,
+        expected_backbone=backbone,
+        expected_use_heatmap=use_heatmap,
+    )
+
     if use_heatmap:
         cnn = MouseHeatmapCNN(backbone=backbone)
         logger.info("Loading heatmap CNN model...")
@@ -70,7 +79,7 @@ def _load_tracking_model(cnn_model_path: str, backbone: str, use_heatmap: bool, 
         cnn = MouseCNN(backbone=backbone)
         logger.info("Loading coordinate CNN model...")
 
-    cnn.load_state_dict(torch.load(cnn_model_path, map_location=device))
+    cnn.load_state_dict(state_dict)
     cnn.to(device)
     cnn.eval()
     logger.info("CNN model loaded successfully.")
@@ -78,20 +87,16 @@ def _load_tracking_model(cnn_model_path: str, backbone: str, use_heatmap: bool, 
 
 
 def _open_io(video_path: str, output_video: str, output_csv: str, use_heatmap: bool):
+    video_info = get_video_info(video_path, require_square=True)
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Error opening video: {video_path}")
 
-    fps = int(cap.get(cv2.CAP_PROP_FPS))
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = video_info.fps
+    width = video_info.width
+    height = video_info.height
+    total_frames = video_info.total_frames
     logger.info(f"Input video: {width}x{height} @ {fps} fps, {total_frames} frames")
-    if width != height:
-        logger.warning(
-            f"Warning: input video is non-square ({width}x{height}). "
-            f"Frames are resized to {IMG_SIZE[0]}x{IMG_SIZE[1]}, which stretches aspect ratio."
-        )
 
     for path in [output_video, output_csv]:
         output_dir = os.path.dirname(path)
@@ -224,11 +229,7 @@ def track_video(
     logger.info(f"Smoothing factor: {smoothing}" + (" (no smoothing)" if smoothing >= 1.0 else ""))
 
     cnn = _load_tracking_model(cnn_model_path, backbone, use_heatmap, device)
-    try:
-        cap, out_video, width, height, total_frames = _open_io(video_path, output_video, output_csv, use_heatmap)
-    except RuntimeError as exc:
-        logger.error(str(exc))
-        return
+    cap, out_video, width, height, total_frames = _open_io(video_path, output_video, output_csv, use_heatmap)
 
     ret, first_frame = cap.read()
     if not ret:
@@ -272,8 +273,8 @@ def track_video(
         prev_refined_coords = raw_coords.copy()
 
         norm_x, norm_y = raw_coords
-        pixel_x = int(norm_x * width)
-        pixel_y = int(norm_y * height)
+        pixel_x = int(np.clip(norm_x * (width - 1), 0, width - 1)) if width > 0 else 0
+        pixel_y = int(np.clip(norm_y * (height - 1), 0, height - 1)) if height > 0 else 0
         results.append(_build_result_row(pixel_x, pixel_y, heatmap_conf))
 
         cv2.circle(frame, (pixel_x, pixel_y), 8, (0, 0, 255), -1)

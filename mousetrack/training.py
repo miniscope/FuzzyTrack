@@ -1,19 +1,21 @@
 """Training functions for CNN model."""
+import copy
 import os
 from typing import List, Union
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, random_split, ConcatDataset
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
-import cv2
-import numpy as np
 
 from .models import MouseCNN, MouseHeatmapCNN
 from .dataset import FrameDataset
-from .config import IMG_SIZE, HEATMAP_SIZE
+from .config import IMG_SIZE
 from . import logger
+from .checkpoints import save_checkpoint
+from .video import get_video_info
 
 
 class HeatmapLoss(nn.Module):
@@ -96,11 +98,15 @@ def train_cnn(
 
     # Load datasets from all video/annotation pairs
     datasets = []
-    total_samples = 0
     for video_path, annotations_path in zip(video_paths, annotations_paths):
-        ds = FrameDataset(video_path, annotations_path, use_heatmap=use_heatmap, heatmap_sigma=heatmap_sigma, cache_frames=cache_frames)
+        ds = FrameDataset(
+            video_path,
+            annotations_path,
+            use_heatmap=use_heatmap,
+            heatmap_sigma=heatmap_sigma,
+            cache_frames=cache_frames,
+        )
         datasets.append(ds)
-        total_samples += len(ds)
         logger.info(f"Loaded {len(ds)} samples from {video_path}")
 
     # Combine all datasets
@@ -109,7 +115,13 @@ def train_cnn(
     else:
         full_dataset = ConcatDataset(datasets)
 
-    val_size = int(len(full_dataset) * val_split)
+    dataset_size = len(full_dataset)
+    if dataset_size < 2:
+        raise ValueError("Need at least 2 annotated samples to create train/validation splits")
+
+    val_size = int(dataset_size * val_split)
+    val_size = max(1, val_size)
+    val_size = min(val_size, dataset_size - 1)
     train_size = len(full_dataset) - val_size
     train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
 
@@ -177,18 +189,9 @@ def train_cnn(
     )
 
     # Get video dimensions from first video
-    cap = cv2.VideoCapture(video_paths[0])
-    ret, sample_frame = cap.read()
-    if ret:
-        video_height, video_width = sample_frame.shape[:2]
-    else:
-        video_width, video_height = IMG_SIZE[0], IMG_SIZE[1]
-    cap.release()
-    if video_width != video_height:
-        logger.warning(
-            f"Warning: training video is non-square ({video_width}x{video_height}). "
-            f"Frames are resized to {IMG_SIZE[0]}x{IMG_SIZE[1]}, which stretches aspect ratio."
-        )
+    video_info = get_video_info(video_paths[0], require_square=True)
+    video_width = video_info.width
+    video_height = video_info.height
     
     # TensorBoard
     writer = SummaryWriter(log_dir=logdir)
@@ -246,7 +249,7 @@ def train_cnn(
         if improvement > 1e-4:
             best_val_loss = avg_val_loss
             patience_counter = 0
-            best_model_state = model.state_dict().copy()
+            best_model_state = copy.deepcopy(model.state_dict())
             status = "★ BEST"
         else:
             patience_counter += 1
@@ -272,7 +275,15 @@ def train_cnn(
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
 
-    torch.save(model.state_dict(), output_path)
+    save_checkpoint(
+        output_path,
+        model.state_dict(),
+        backbone=backbone,
+        use_heatmap=use_heatmap,
+        heatmap_sigma=heatmap_sigma,
+        img_size=IMG_SIZE,
+        video_size=(video_width, video_height),
+    )
     writer.close()
     logger.info(f"Model saved to {output_path}")
     logger.info(f"TensorBoard logs saved to {logdir}")

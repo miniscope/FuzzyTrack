@@ -1,10 +1,12 @@
 """Dataset classes for training."""
+import cv2
+import numpy as np
+import pandas as pd
 import torch
 from torch.utils.data import Dataset
-import cv2
-import pandas as pd
-import numpy as np
+
 from .config import IMG_SIZE, HEATMAP_SIZE, HEATMAP_SIGMA
+from .video import get_video_info
 
 
 class FrameDataset(Dataset):
@@ -12,17 +14,59 @@ class FrameDataset(Dataset):
 
     def __init__(self, video_path, csv_path, use_heatmap=True, heatmap_sigma=None, cache_frames=True, is_train=False):
         self.video_path = video_path
-        self.df = pd.read_csv(csv_path)
+        self.video_info = get_video_info(video_path, require_square=True)
+        self.df = self._load_and_validate_annotations(csv_path)
         self.cap = None  # Opened lazily per worker (cv2.VideoCapture is not fork-safe)
         self.use_heatmap = use_heatmap
         self.heatmap_sigma = heatmap_sigma if heatmap_sigma is not None else HEATMAP_SIGMA
         self.cache_frames = cache_frames
         self.frame_cache = {}
-        self.video_size = None  # (width, height)
+        self.video_size = (self.video_info.width, self.video_info.height)
         self.is_train = is_train  # Enable data augmentation for training
 
         if cache_frames:
             self._preload_frames()
+
+    def _load_and_validate_annotations(self, csv_path):
+        """Load annotation CSV and validate required columns and bounds."""
+        df = pd.read_csv(csv_path)
+        required_columns = {"frame_idx", "x", "y"}
+        missing_columns = required_columns - set(df.columns)
+        if missing_columns:
+            missing = ", ".join(sorted(missing_columns))
+            raise ValueError(f"Annotation CSV is missing required column(s): {missing} ({csv_path})")
+        if df.empty:
+            raise ValueError(f"Annotation CSV is empty: {csv_path}")
+
+        df = df.loc[:, ["frame_idx", "x", "y"]].copy()
+        for column in ["frame_idx", "x", "y"]:
+            df[column] = pd.to_numeric(df[column], errors="coerce")
+
+        invalid_rows = df[df[["frame_idx", "x", "y"]].isna().any(axis=1)]
+        if not invalid_rows.empty:
+            raise ValueError(f"Annotation CSV contains non-numeric values: {csv_path}")
+
+        frame_idx = df["frame_idx"]
+        if not np.allclose(frame_idx, np.round(frame_idx)):
+            raise ValueError(f"Annotation CSV has non-integer frame indices: {csv_path}")
+        df["frame_idx"] = frame_idx.astype(int)
+
+        if (df["frame_idx"] < 0).any():
+            raise ValueError(f"Annotation CSV has negative frame indices: {csv_path}")
+        if (df["frame_idx"] >= self.video_info.total_frames).any():
+            raise ValueError(
+                f"Annotation CSV has frame_idx outside video range 0-{self.video_info.total_frames - 1}: {csv_path}"
+            )
+        if ((df["x"] < 0) | (df["x"] >= self.video_info.width)).any():
+            raise ValueError(
+                f"Annotation CSV has x outside video bounds 0-{self.video_info.width - 1}: {csv_path}"
+            )
+        if ((df["y"] < 0) | (df["y"] >= self.video_info.height)).any():
+            raise ValueError(
+                f"Annotation CSV has y outside video bounds 0-{self.video_info.height - 1}: {csv_path}"
+            )
+
+        return df.sort_values("frame_idx").reset_index(drop=True)
 
     def _preload_frames(self):
         """Preload all required frames into memory."""
@@ -40,8 +84,6 @@ class FrameDataset(Dataset):
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             ret, frame = cap.read()
             if ret:
-                if self.video_size is None:
-                    self.video_size = (frame.shape[1], frame.shape[0])  # (w, h)
                 # Resize and convert to grayscale immediately to save memory
                 resized = cv2.resize(frame, IMG_SIZE)
                 gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
