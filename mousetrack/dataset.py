@@ -1,18 +1,27 @@
 """Dataset classes for training."""
+
 import cv2
 import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-from .config import IMG_SIZE, HEATMAP_SIZE, HEATMAP_SIGMA
+from .config import HEATMAP_SIGMA, HEATMAP_SIZE, IMG_SIZE
 from .video import get_video_info
 
 
 class FrameDataset(Dataset):
     """Dataset for CNN training: loads frames and returns motion difference images."""
 
-    def __init__(self, video_path, csv_path, use_heatmap=True, heatmap_sigma=None, cache_frames=True, is_train=False):
+    def __init__(
+        self,
+        video_path,
+        csv_path,
+        use_heatmap=True,
+        heatmap_sigma=None,
+        cache_frames=True,
+        is_train=False,
+    ):
         self.video_path = video_path
         self.video_info = get_video_info(video_path, require_square=True)
         self.df = self._load_and_validate_annotations(csv_path)
@@ -34,7 +43,9 @@ class FrameDataset(Dataset):
         missing_columns = required_columns - set(df.columns)
         if missing_columns:
             missing = ", ".join(sorted(missing_columns))
-            raise ValueError(f"Annotation CSV is missing required column(s): {missing} ({csv_path})")
+            raise ValueError(
+                f"Annotation CSV is missing required column(s): {missing} ({csv_path})"
+            )
         if df.empty:
             raise ValueError(f"Annotation CSV is empty: {csv_path}")
 
@@ -73,7 +84,7 @@ class FrameDataset(Dataset):
         # Get unique frame indices needed (current and previous for each sample)
         frame_indices = set()
         for _, row in self.df.iterrows():
-            frame_idx = row['frame_idx']
+            frame_idx = row["frame_idx"]
             frame_indices.add(frame_idx)
             if frame_idx > 0:
                 frame_indices.add(frame_idx - 1)
@@ -101,9 +112,9 @@ class FrameDataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        frame_idx = row['frame_idx']
-        target_x = row['x']
-        target_y = row['y']
+        frame_idx = row["frame_idx"]
+        target_x = row["x"]
+        target_y = row["y"]
 
         if self.cache_frames and frame_idx in self.frame_cache:
             # Use cached frames (already resized and grayscale)
@@ -154,13 +165,15 @@ class FrameDataset(Dataset):
 
         if self.use_heatmap:
             # Generate heatmap target
-            heatmap = self._generate_heatmap(norm_x, norm_y, HEATMAP_SIZE[0], HEATMAP_SIZE[1], self.heatmap_sigma)
+            heatmap = self._generate_heatmap(
+                norm_x, norm_y, HEATMAP_SIZE[0], HEATMAP_SIZE[1], self.heatmap_sigma
+            )
             # Add channel dimension: (H, W) -> (1, H, W) to match model output
             heatmap = np.expand_dims(heatmap, axis=0)
             return torch.tensor(image), torch.tensor(heatmap, dtype=torch.float32)
         else:
             return torch.tensor(image), torch.tensor(coords)
-    
+
     def _generate_heatmap(self, x, y, h, w, sigma):
         """Generate Gaussian heatmap from normalized coordinates."""
         # Convert normalized coordinates to heatmap coordinates
@@ -174,7 +187,7 @@ class FrameDataset(Dataset):
 
         # Generate Gaussian (unnormalized - peak value is 1.0)
         y_coords, x_coords = np.ogrid[:h, :w]
-        heatmap = np.exp(-((x_coords - hm_x)**2 + (y_coords - hm_y)**2) / (2 * sigma**2))
+        heatmap = np.exp(-((x_coords - hm_x) ** 2 + (y_coords - hm_y) ** 2) / (2 * sigma**2))
 
         # Keep unnormalized - peak is 1.0, away from center approaches 0
         return heatmap.astype(np.float32)

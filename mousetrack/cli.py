@@ -1,4 +1,5 @@
 """Command-line interface for FuzzyTrack."""
+
 from datetime import datetime
 from pathlib import Path
 
@@ -25,16 +26,37 @@ def main():
 
 
 @main.command()
-@click.option('--video', '-v', multiple=True, type=click.Path(exists=True), help='Video file(s) - can specify multiple')
-@click.option('--annotations', '-a', multiple=True, type=click.Path(exists=True), help='Annotations CSV(s) - must match videos')
-@click.option('--data-root', '-d', type=click.Path(exists=True), help='Root directory containing subdirs, each with a .mp4 and .csv file')
-@click.option('--config', '-c', required=True, type=click.Path(exists=True), help='Config YAML file')
-@click.option('--output', '-o', default=None, type=click.Path(), help='Output model path')
+@click.option(
+    "--video",
+    "-v",
+    multiple=True,
+    type=click.Path(exists=True),
+    help="Video file(s) - can specify multiple",
+)
+@click.option(
+    "--annotations",
+    "-a",
+    multiple=True,
+    type=click.Path(exists=True),
+    help="Annotations CSV(s) - must match videos",
+)
+@click.option(
+    "--data-root",
+    "-d",
+    type=click.Path(exists=True),
+    help="Root directory containing subdirs, each with a .mp4 and .csv file",
+)
+@click.option(
+    "--config", "-c", required=True, type=click.Path(exists=True), help="Config YAML file"
+)
+@click.option("--output", "-o", default=None, type=click.Path(), help="Output model path")
 def train_cnn(video, annotations, data_root, config, output):
     """Train CNN model."""
     if data_root:
         if video or annotations:
-            raise click.BadParameter("Cannot use --data-root together with --video or --annotations")
+            raise click.BadParameter(
+                "Cannot use --data-root together with --video or --annotations"
+            )
 
         data_root_path = Path(data_root)
         video_list = []
@@ -44,8 +66,8 @@ def train_cnn(video, annotations, data_root, config, output):
             if not subdir.is_dir():
                 continue
 
-            video_files = list(subdir.glob('*.mp4'))
-            csv_files = list(subdir.glob('*.csv'))
+            video_files = list(subdir.glob("*.mp4"))
+            csv_files = list(subdir.glob("*.csv"))
 
             if video_files and csv_files:
                 video_list.append(str(video_files[0]))
@@ -54,10 +76,12 @@ def train_cnn(video, annotations, data_root, config, output):
             else:
                 missing = []
                 if not video_files:
-                    missing.append('*.mp4')
+                    missing.append("*.mp4")
                 if not csv_files:
-                    missing.append('*.csv')
-                click.echo(f"Warning: Skipping {subdir.name} - missing {', '.join(missing)}", err=True)
+                    missing.append("*.csv")
+                click.echo(
+                    f"Warning: Skipping {subdir.name} - missing {', '.join(missing)}", err=True
+                )
 
         if not video_list:
             raise click.BadParameter(
@@ -69,7 +93,9 @@ def train_cnn(video, annotations, data_root, config, output):
         click.echo(f"Loaded {len(video)} video/annotation pairs from {data_root}")
     else:
         if not video or not annotations:
-            raise click.BadParameter("Must provide either --data-root OR both --video and --annotations")
+            raise click.BadParameter(
+                "Must provide either --data-root OR both --video and --annotations"
+            )
         if len(video) != len(annotations):
             raise click.BadParameter(
                 f"Number of videos ({len(video)}) must match number of annotations ({len(annotations)})"
@@ -77,24 +103,26 @@ def train_cnn(video, annotations, data_root, config, output):
 
     cfg = load_config(config)
 
-    use_heatmap = cfg['model']['use_heatmap']
-    backbone = cfg['model']['backbone']
-    batch_size = cfg['training']['batch_size']
-    epochs = cfg['training']['epochs']
-    patience = cfg['training']['patience']
-    learning_rate = cfg['training']['learning_rate']
-    val_split = cfg['training']['val_split']
-    heatmap_sigma = cfg['heatmap']['sigma']
-    num_workers = cfg['training'].get('num_workers', 4)
-    pin_memory = cfg['training'].get('pin_memory', True)
-    cache_frames = cfg['training'].get('cache_frames', True)
+    use_heatmap = cfg["model"]["use_heatmap"]
+    backbone = cfg["model"]["backbone"]
+    batch_size = cfg["training"]["batch_size"]
+    epochs = cfg["training"]["epochs"]
+    patience = cfg["training"]["patience"]
+    learning_rate = cfg["training"]["learning_rate"]
+    val_split = cfg["training"]["val_split"]
+    heatmap_sigma = cfg["heatmap"]["sigma"]
+    num_workers = cfg["training"].get("num_workers", 4)
+    pin_memory = cfg["training"].get("pin_memory", True)
+    cache_frames = cfg["training"].get("cache_frames", True)
 
     if output is None:
-        output = 'models/mouse_cnn_heatmap.pth' if use_heatmap else 'models/mouse_cnn_regression.pth'
+        output = (
+            "models/mouse_cnn_heatmap.pth" if use_heatmap else "models/mouse_cnn_regression.pth"
+        )
 
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    model_type = 'heatmap' if use_heatmap else 'regression'
-    logdir = f'runs/fuzzytrack_{model_type}_{timestamp}'
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    model_type = "heatmap" if use_heatmap else "regression"
+    logdir = f"runs/fuzzytrack_{model_type}_{timestamp}"
 
     _raise_click_error(
         train_cnn_func,
@@ -117,49 +145,63 @@ def train_cnn(video, annotations, data_root, config, output):
 
 
 @main.command()
-@click.option('--video', '-v', required=True, type=click.Path(exists=True), help='Video file')
-@click.option('--config', '-c', required=True, type=click.Path(exists=True), help='Config YAML file')
-@click.option('--cnn-model', '-m', default=None, type=click.Path(exists=True), help='CNN model path')
-@click.option('--output', '-o', default=None, type=click.Path(), help='Output path (base name for .mp4 and .csv, or directory)')
+@click.option("--video", "-v", required=True, type=click.Path(exists=True), help="Video file")
+@click.option(
+    "--config", "-c", required=True, type=click.Path(exists=True), help="Config YAML file"
+)
+@click.option(
+    "--cnn-model", "-m", default=None, type=click.Path(exists=True), help="CNN model path"
+)
+@click.option(
+    "--output",
+    "-o",
+    default=None,
+    type=click.Path(),
+    help="Output path (base name for .mp4 and .csv, or directory)",
+)
 def track(video, config, cnn_model, output):
     """Run tracking and export raw DLC coordinates."""
     import os
 
     cfg = load_config(config)
 
-    use_heatmap = cfg['model']['use_heatmap']
-    backbone = cfg['model']['backbone']
-    smoothing = cfg['tracking']['smoothing']
-    enable_warmup = cfg['tracking'].get('enable_warmup', True)
-    warmup_frames_heatmap = cfg['tracking'].get('warmup_frames_heatmap', 30)
-    warmup_frames_regression = cfg['tracking'].get('warmup_frames_regression', 5)
-    min_warmup_confident_frames_heatmap = cfg['tracking'].get('min_warmup_confident_frames_heatmap', 10)
-    min_warmup_confident_frames_regression = cfg['tracking'].get('min_warmup_confident_frames_regression', 3)
-    output_scorer = cfg['tracking'].get('output_scorer', 'FuzzyTrack')
-    output_bodypart = cfg['tracking'].get('output_bodypart', 'LED')
-    max_speed = cfg['tracking'].get('max_speed')
-    heatmap_min_confidence = cfg['tracking'].get('heatmap_min_confidence', 0.05)
+    use_heatmap = cfg["model"]["use_heatmap"]
+    backbone = cfg["model"]["backbone"]
+    smoothing = cfg["tracking"]["smoothing"]
+    enable_warmup = cfg["tracking"].get("enable_warmup", True)
+    warmup_frames_heatmap = cfg["tracking"].get("warmup_frames_heatmap", 30)
+    warmup_frames_regression = cfg["tracking"].get("warmup_frames_regression", 5)
+    min_warmup_confident_frames_heatmap = cfg["tracking"].get(
+        "min_warmup_confident_frames_heatmap", 10
+    )
+    min_warmup_confident_frames_regression = cfg["tracking"].get(
+        "min_warmup_confident_frames_regression", 3
+    )
+    output_scorer = cfg["tracking"].get("output_scorer", "FuzzyTrack")
+    output_bodypart = cfg["tracking"].get("output_bodypart", "LED")
+    max_speed = cfg["tracking"].get("max_speed")
+    heatmap_min_confidence = cfg["tracking"].get("heatmap_min_confidence", 0.05)
 
-    model_type = 'heatmap' if use_heatmap else 'regression'
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    model_type = "heatmap" if use_heatmap else "regression"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     if cnn_model is None:
-        cnn_model = f'models/mouse_cnn_{model_type}.pth'
+        cnn_model = f"models/mouse_cnn_{model_type}.pth"
 
     if output is not None:
         output_path = Path(output)
         looks_like_directory = output.endswith(os.sep) or output_path.suffix == ""
         if os.path.isdir(output) or looks_like_directory:
-            base_name = f'tracking_{model_type}_{timestamp}'
-            output_video = os.path.join(output, f'{base_name}.mp4')
-            output_csv = os.path.join(output, f'{base_name}.csv')
+            base_name = f"tracking_{model_type}_{timestamp}"
+            output_video = os.path.join(output, f"{base_name}.mp4")
+            output_csv = os.path.join(output, f"{base_name}.csv")
         else:
-            base_path = output.rsplit('.', 1)[0] if '.' in os.path.basename(output) else output
-            output_video = f'{base_path}.mp4'
-            output_csv = f'{base_path}.csv'
+            base_path = output.rsplit(".", 1)[0] if "." in os.path.basename(output) else output
+            output_video = f"{base_path}.mp4"
+            output_csv = f"{base_path}.csv"
     else:
-        output_video = f'output/tracking_{model_type}_{timestamp}.mp4'
-        output_csv = f'output/tracking_{model_type}_{timestamp}.csv'
+        output_video = f"output/tracking_{model_type}_{timestamp}.mp4"
+        output_csv = f"output/tracking_{model_type}_{timestamp}.csv"
 
     _raise_click_error(
         track_video,
@@ -183,13 +225,19 @@ def track(video, config, cnn_model, output):
 
 
 @main.command()
-@click.option('--video', '-v', required=True, type=click.Path(exists=True), help='Video file')
-@click.option('--input-csv', '-i', default=None, type=click.Path(exists=True), help='Existing CSV to append to (default: auto-discover from video path)')
-@click.option('--num-samples', '-n', default=300, type=int, help='Number of frames to annotate')
+@click.option("--video", "-v", required=True, type=click.Path(exists=True), help="Video file")
+@click.option(
+    "--input-csv",
+    "-i",
+    default=None,
+    type=click.Path(exists=True),
+    help="Existing CSV to append to (default: auto-discover from video path)",
+)
+@click.option("--num-samples", "-n", default=300, type=int, help="Number of frames to annotate")
 def annotate(video, input_csv, num_samples):
     """Annotate video frames (coordinates only)."""
     video_path = Path(video)
-    csv_path = video_path.with_suffix('.csv')
+    csv_path = video_path.with_suffix(".csv")
 
     if input_csv is None and csv_path.exists():
         input_csv = str(csv_path)

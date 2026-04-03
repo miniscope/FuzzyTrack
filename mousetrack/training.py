@@ -1,25 +1,26 @@
 """Training functions for CNN model."""
+
 import copy
 import os
-from typing import List, Union
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, random_split, ConcatDataset
+from torch.utils.data import ConcatDataset, DataLoader, random_split
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from .models import MouseCNN, MouseHeatmapCNN
-from .dataset import FrameDataset
-from .config import IMG_SIZE
 from . import logger
 from .checkpoints import save_checkpoint
+from .config import IMG_SIZE
+from .dataset import FrameDataset
+from .models import MouseCNN, MouseHeatmapCNN
 from .video import get_video_info
 
 
 class HeatmapLoss(nn.Module):
     """Combined MSE + peak coordinate loss for heatmap regression."""
+
     def __init__(self, mse_weight=1.0, coord_weight=10.0):
         super().__init__()
         self.mse_weight = mse_weight
@@ -49,14 +50,14 @@ class HeatmapLoss(nn.Module):
         pred_x = (pred_max_indices % W).float() / (W - 1)
 
         # L2 distance between peaks
-        coord_loss = torch.mean((pred_x - target_x)**2 + (pred_y - target_y)**2)
+        coord_loss = torch.mean((pred_x - target_x) ** 2 + (pred_y - target_y) ** 2)
 
         return self.mse_weight * mse_loss + self.coord_weight * coord_loss
 
 
 def train_cnn(
-    video_paths: Union[str, List[str]],
-    annotations_paths: Union[str, List[str]],
+    video_paths: str | list[str],
+    annotations_paths: str | list[str],
     output_path: str,
     batch_size: int,
     max_epochs: int,
@@ -65,7 +66,7 @@ def train_cnn(
     learning_rate: float,
     logdir: str,
     use_heatmap: bool,
-    backbone: str = 'resnet18',
+    backbone: str = "resnet18",
     heatmap_sigma: float = None,
     num_workers: int = 4,
     pin_memory: bool = True,
@@ -94,11 +95,13 @@ def train_cnn(
         annotations_paths = [annotations_paths]
 
     if len(video_paths) != len(annotations_paths):
-        raise ValueError(f"Number of videos ({len(video_paths)}) must match annotations ({len(annotations_paths)})")
+        raise ValueError(
+            f"Number of videos ({len(video_paths)}) must match annotations ({len(annotations_paths)})"
+        )
 
     # Load datasets from all video/annotation pairs
     datasets = []
-    for video_path, annotations_path in zip(video_paths, annotations_paths):
+    for video_path, annotations_path in zip(video_paths, annotations_paths, strict=True):
         ds = FrameDataset(
             video_path,
             annotations_path,
@@ -128,9 +131,9 @@ def train_cnn(
     # Set is_train flag for augmentation
     def set_is_train(dataset, is_train):
         """Recursively set is_train on underlying datasets."""
-        if hasattr(dataset, 'dataset'):  # Subset
+        if hasattr(dataset, "dataset"):  # Subset
             set_is_train(dataset.dataset, is_train)
-        elif hasattr(dataset, 'datasets'):  # ConcatDataset
+        elif hasattr(dataset, "datasets"):  # ConcatDataset
             for ds in dataset.datasets:
                 ds.is_train = is_train
         else:  # Base dataset
@@ -181,37 +184,35 @@ def train_cnn(
 
     # Learning rate scheduler: reduce LR on plateau
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode='min',
-        factor=0.5,
-        patience=10,
-        min_lr=1e-6
+        optimizer, mode="min", factor=0.5, patience=10, min_lr=1e-6
     )
 
     # Get video dimensions from first video
     video_info = get_video_info(video_paths[0], require_square=True)
     video_width = video_info.width
     video_height = video_info.height
-    
+
     # TensorBoard
     writer = SummaryWriter(log_dir=logdir)
-    
+
     # Training loop
-    best_val_loss = float('inf')
+    best_val_loss = float("inf")
     patience_counter = 0
     best_model_state = None
-    
+
     logger.info(f"Training on {train_size} samples, validating on {val_size} samples")
     logger.info(f"Video dimensions: {video_width}x{video_height}")
-    
+
     pbar = tqdm(range(max_epochs), desc="Training CNN")
-    
+
     for epoch in pbar:
         # Training
         model.train()
         train_loss = 0
         for imgs, targets in train_loader:
-            imgs, targets = imgs.to(device, non_blocking=True), targets.to(device, non_blocking=True)
+            imgs, targets = imgs.to(device, non_blocking=True), targets.to(
+                device, non_blocking=True
+            )
             optimizer.zero_grad()
             pred = model(imgs)
             loss = criterion(pred, targets)
@@ -232,18 +233,18 @@ def train_cnn(
                 pred = model(imgs)
                 loss = criterion(pred, targets)
                 val_loss += loss.item()
-        
+
         avg_val_loss = val_loss / len(val_loader)
 
         # Step learning rate scheduler
         scheduler.step(avg_val_loss)
-        current_lr = optimizer.param_groups[0]['lr']
+        current_lr = optimizer.param_groups[0]["lr"]
 
         # Log to TensorBoard
         writer.add_scalar("Loss/train_coord", avg_train_loss, epoch)
         writer.add_scalar("Loss/val_coord", avg_val_loss, epoch)
         writer.add_scalar("LearningRate", current_lr, epoch)
-        
+
         # Early stopping
         improvement = best_val_loss - avg_val_loss
         if improvement > 1e-4:
@@ -254,17 +255,19 @@ def train_cnn(
         else:
             patience_counter += 1
             status = f"({patience_counter}/{patience})"
-        
-        pbar.set_postfix({
-            'train_loss': f'{avg_train_loss:.4f}',
-            'val_loss': f'{avg_val_loss:.4f}',
-            'status': status
-        })
-        
+
+        pbar.set_postfix(
+            {
+                "train_loss": f"{avg_train_loss:.4f}",
+                "val_loss": f"{avg_val_loss:.4f}",
+                "status": status,
+            }
+        )
+
         if patience_counter >= patience:
-            pbar.set_postfix({'status': f'Early stopping at epoch {epoch+1}'})
+            pbar.set_postfix({"status": f"Early stopping at epoch {epoch+1}"})
             break
-    
+
     # Save best model
     if best_model_state is not None:
         model.load_state_dict(best_model_state)

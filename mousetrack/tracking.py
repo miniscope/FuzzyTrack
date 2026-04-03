@@ -1,8 +1,8 @@
 """Tracking inference functions."""
+
+import os
 from dataclasses import dataclass
 from pathlib import Path
-import os
-from typing import Optional
 
 import cv2
 import numpy as np
@@ -10,10 +10,10 @@ import pandas as pd
 import torch
 from tqdm import tqdm
 
+from . import logger
 from .checkpoints import load_checkpoint
 from .config import IMG_SIZE
 from .models import MouseCNN, MouseHeatmapCNN
-from . import logger
 from .video import get_video_info
 
 
@@ -26,7 +26,9 @@ class WarmupState:
     coords: list[np.ndarray]
 
 
-def extract_coords_from_heatmap(heatmap: np.ndarray, use_weighted_avg: bool = True) -> tuple[np.ndarray, float]:
+def extract_coords_from_heatmap(
+    heatmap: np.ndarray, use_weighted_avg: bool = True
+) -> tuple[np.ndarray, float]:
     """Extract coordinates from a heatmap output."""
     if heatmap.ndim == 3:
         heatmap = heatmap[0]
@@ -64,7 +66,9 @@ def extract_coords_from_heatmap(heatmap: np.ndarray, use_weighted_avg: bool = Tr
     return np.array([norm_x, norm_y], dtype=np.float32), float(confidence)
 
 
-def _load_tracking_model(cnn_model_path: str, backbone: str, use_heatmap: bool, device: torch.device):
+def _load_tracking_model(
+    cnn_model_path: str, backbone: str, use_heatmap: bool, device: torch.device
+):
     state_dict, _metadata = load_checkpoint(
         cnn_model_path,
         device=device,
@@ -125,7 +129,9 @@ def _make_warmup_state(
 ) -> WarmupState:
     warmup_frames = warmup_frames_heatmap if use_heatmap else warmup_frames_regression
     min_confident_frames = (
-        min_warmup_confident_frames_heatmap if use_heatmap else min_warmup_confident_frames_regression
+        min_warmup_confident_frames_heatmap
+        if use_heatmap
+        else min_warmup_confident_frames_regression
     )
     if not enable_warmup:
         warmup_frames = 0
@@ -182,7 +188,9 @@ def _refine_coords(
     return np.clip(raw_coords, 0.0, 1.0)
 
 
-def _build_result_row(pixel_x: int, pixel_y: int, heatmap_conf: float | None) -> dict[str, int | float]:
+def _build_result_row(
+    pixel_x: int, pixel_y: int, heatmap_conf: float | None
+) -> dict[str, int | float]:
     return {
         "x": pixel_x,
         "y": pixel_y,
@@ -210,7 +218,7 @@ def track_video(
     cnn_model_path: str,
     output_video: str,
     output_csv: str,
-    max_speed: Optional[float] = None,
+    max_speed: float | None = None,
     smoothing: float = 0.5,
     backbone: str = "resnet18",
     use_heatmap: bool = True,
@@ -229,7 +237,9 @@ def track_video(
     logger.info(f"Smoothing factor: {smoothing}" + (" (no smoothing)" if smoothing >= 1.0 else ""))
 
     cnn = _load_tracking_model(cnn_model_path, backbone, use_heatmap, device)
-    cap, out_video, width, height, total_frames = _open_io(video_path, output_video, output_csv, use_heatmap)
+    cap, out_video, width, height, total_frames = _open_io(
+        video_path, output_video, output_csv, use_heatmap
+    )
 
     ret, first_frame = cap.read()
     if not ret:
@@ -268,7 +278,9 @@ def track_video(
         with torch.no_grad():
             model_out = cnn(input_tensor)
 
-        raw_coords, heatmap_conf, heatmap = _extract_model_coords(model_out, use_heatmap, frame_idx, warmup)
+        raw_coords, heatmap_conf, heatmap = _extract_model_coords(
+            model_out, use_heatmap, frame_idx, warmup
+        )
         raw_coords = _refine_coords(raw_coords, prev_refined_coords, smoothing, max_speed)
         prev_refined_coords = raw_coords.copy()
 
@@ -278,14 +290,30 @@ def track_video(
         results.append(_build_result_row(pixel_x, pixel_y, heatmap_conf))
 
         cv2.circle(frame, (pixel_x, pixel_y), 8, (0, 0, 255), -1)
-        cv2.putText(frame, f"Frame: {frame_idx}", (20, height - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.putText(
+            frame,
+            f"Frame: {frame_idx}",
+            (20, height - 20),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 255, 255),
+            2,
+        )
 
         if use_heatmap:
             heatmap_vis = (heatmap / (heatmap.max() + 1e-8) * 255).astype(np.uint8)
             heatmap_vis = cv2.resize(heatmap_vis, (width, height), interpolation=cv2.INTER_NEAREST)
             heatmap_colored = cv2.applyColorMap(heatmap_vis, cv2.COLORMAP_JET)
             cv2.circle(heatmap_colored, (pixel_x, pixel_y), 8, (255, 255, 255), 2)
-            cv2.putText(heatmap_colored, "Heatmap", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            cv2.putText(
+                heatmap_colored,
+                "Heatmap",
+                (20, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (255, 255, 255),
+                2,
+            )
             cv2.putText(
                 heatmap_colored,
                 f"Conf: {heatmap_conf:.3f}" if heatmap_conf is not None else "Conf: N/A",

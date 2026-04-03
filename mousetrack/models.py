@@ -1,12 +1,13 @@
 """Neural network models for FuzzyTrack."""
+
 import torch
 import torch.nn as nn
 import torchvision.models as models
 
 # Backbone configurations: (model_func, weights, feature_dim)
 BACKBONES = {
-    'resnet18': (models.resnet18, 'ResNet18_Weights', 512),
-    'resnet50': (models.resnet50, 'ResNet50_Weights', 2048),
+    "resnet18": (models.resnet18, "ResNet18_Weights", 512),
+    "resnet50": (models.resnet50, "ResNet50_Weights", 2048),
 }
 
 
@@ -20,7 +21,7 @@ def get_backbone(name: str):
 
 
 class MouseCNN(nn.Module):
-    def __init__(self, backbone: str = 'resnet18'):
+    def __init__(self, backbone: str = "resnet18"):
         super().__init__()
         model_func, weights, feature_dim = get_backbone(backbone)
         self.backbone = model_func(weights=weights)
@@ -35,7 +36,8 @@ class MouseCNN(nn.Module):
 
 class MouseHeatmapCNN(nn.Module):
     """CNN that predicts a heatmap instead of direct coordinates."""
-    def __init__(self, backbone: str = 'resnet18'):
+
+    def __init__(self, backbone: str = "resnet18"):
         super().__init__()
         model_func, weights, feature_dim = get_backbone(backbone)
         # Use backbone but remove final pooling to get spatial features
@@ -69,7 +71,7 @@ class MouseHeatmapCNN(nn.Module):
         """Initialize heatmap head with proper weights."""
         for m in self.heatmap_head.modules():
             if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d)):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.BatchNorm2d):
