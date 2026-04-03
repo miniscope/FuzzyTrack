@@ -3,7 +3,7 @@ model:
   use_heatmap: true   # true for heatmap mode, false for regression
 
 heatmap:
-  sigma: 3.0  # Gaussian sigma for target heatmap (increased for smoother targets)
+  sigma: 3.0  # Gaussian sigma in heatmap pixels on the 56x56 target heatmap (higher = smoother targets)
 
 training:
   batch_size: 8  # Reduced from 64 to get more batches/epoch (720/8=90 batches vs 11)

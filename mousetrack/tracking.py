@@ -87,6 +87,11 @@ def _open_io(video_path: str, output_video: str, output_csv: str, use_heatmap: b
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     logger.info(f"Input video: {width}x{height} @ {fps} fps, {total_frames} frames")
+    if width != height:
+        logger.warning(
+            f"Warning: input video is non-square ({width}x{height}). "
+            f"Frames are resized to {IMG_SIZE[0]}x{IMG_SIZE[1]}, which stretches aspect ratio."
+        )
 
     for path in [output_video, output_csv]:
         output_dir = os.path.dirname(path)

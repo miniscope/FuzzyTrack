@@ -1,4 +1,4 @@
-"""Neural network models for mouse tracking."""
+"""Neural network models for FuzzyTrack."""
 import torch
 import torch.nn as nn
 import torchvision.models as models

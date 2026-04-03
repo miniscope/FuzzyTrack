@@ -1,6 +1,6 @@
 # FuzzyTrack
 
-Mouse tracking package for fuzzy videos.
+Tracking package for fuzzy videos.
 
 ## Installation
 
@@ -18,7 +18,7 @@ model:
   use_heatmap: true   # true for heatmap mode, false for regression
 
 heatmap:
-  sigma: 3.0  # Gaussian sigma for target heatmap
+  sigma: 3.0  # Gaussian sigma in heatmap pixels on the 56x56 target heatmap
 
 training:
   batch_size: 8
@@ -52,7 +52,7 @@ Maze zone detection and 1D serialization are intentionally handled in `placecell
 
 ### 1. Annotate Video
 ```bash
-mousetrack annotate --video assets/video.mp4
+fuzzytrack annotate --video assets/video.mp4
 ```
 Annotates sampled frames with mouse coordinates. Output is written automatically to a CSV with the same stem as the video.
 
@@ -61,27 +61,27 @@ Annotates sampled frames with mouse coordinates. Output is written automatically
 ### 2. Train CNN (coordinate prediction)
 ```bash
 # Single video
-mousetrack train-cnn -c config/model_config.yaml -v assets/video.mp4 -a assets/video.csv
+fuzzytrack train-cnn -c config/model_config.yaml -v assets/video.mp4 -a assets/video.csv
 
 # Multiple videos
-mousetrack train-cnn -c config/model_config.yaml \
+fuzzytrack train-cnn -c config/model_config.yaml \
   -v assets/video1.mp4 -a assets/video1.csv \
   -v assets/video2.mp4 -a assets/video2.csv
 
 # Dataset directory mode: each subdirectory contains one .mp4 and one .csv
-mousetrack train-cnn -c config/model_config.yaml --data-root assets/dataset
+fuzzytrack train-cnn -c config/model_config.yaml --data-root assets/dataset
 ```
 **Generates:**
 - `models/mouse_cnn_heatmap.pth` or `models/mouse_cnn_regression.pth` (trained model)
-- `runs/mouse_tracker_{heatmap|regression}_{timestamp}/` (TensorBoard logs)
+- `runs/fuzzytrack_{heatmap|regression}_{timestamp}/` (TensorBoard logs)
 
 ### 3. Run Tracking
 ```bash
 # Basic tracking
-mousetrack track -c config/model_config.yaml -v assets/video.mp4
+fuzzytrack track -c config/model_config.yaml -v assets/video.mp4
 
 # Custom model and output base path
-mousetrack track -c config/model_config.yaml \
+fuzzytrack track -c config/model_config.yaml \
   -v assets/video.mp4 \
   --cnn-model models/mouse_cnn_heatmap.pth \
   --output output/tracking
@@ -109,7 +109,7 @@ Recommended release workflow:
 
 ```bash
 # 1. Track in FuzzyTrack
-mousetrack track -c config/model_config.yaml -v assets/video.mp4
+fuzzytrack track -c config/model_config.yaml -v assets/video.mp4
 
 # 2. In placecell data config:
 # behavior_position: output/tracking_heatmap_YYYYMMDD_HHMMSS.csv

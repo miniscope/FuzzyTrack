@@ -1,4 +1,4 @@
-"""Command-line interface for mouse tracking."""
+"""Command-line interface for FuzzyTrack."""
 from datetime import datetime
 from pathlib import Path
 
@@ -12,7 +12,7 @@ from .training import train_cnn as train_cnn_func
 
 @click.group()
 def main():
-    """Mouse tracking CLI."""
+    """FuzzyTrack CLI."""
     pass
 
 
@@ -86,7 +86,7 @@ def train_cnn(video, annotations, data_root, config, output):
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     model_type = 'heatmap' if use_heatmap else 'regression'
-    logdir = f'runs/mouse_tracker_{model_type}_{timestamp}'
+    logdir = f'runs/fuzzytrack_{model_type}_{timestamp}'
 
     train_cnn_func(
         video_paths=list(video),

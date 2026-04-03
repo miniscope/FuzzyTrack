@@ -184,6 +184,11 @@ def train_cnn(
     else:
         video_width, video_height = IMG_SIZE[0], IMG_SIZE[1]
     cap.release()
+    if video_width != video_height:
+        logger.warning(
+            f"Warning: training video is non-square ({video_width}x{video_height}). "
+            f"Frames are resized to {IMG_SIZE[0]}x{IMG_SIZE[1]}, which stretches aspect ratio."
+        )
     
     # TensorBoard
     writer = SummaryWriter(log_dir=logdir)

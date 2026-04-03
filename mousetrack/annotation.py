@@ -48,6 +48,11 @@ def annotate_video(
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    if frame_width != frame_height:
+        logger.warning(
+            f"Warning: input video is non-square ({frame_width}x{frame_height}). "
+            "FuzzyTrack currently resizes frames to 224x224, which stretches aspect ratio."
+        )
 
     # Track spatial coverage of annotations to avoid center-biased labels.
     grid_size = 4

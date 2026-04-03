@@ -1,5 +1,5 @@
 [project]
-name = "mousetrack"
+name = "fuzzytrack"
 version = "0.1.0"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.scripts]
-mousetrack = "mousetrack.cli:cli_main"
+fuzzytrack = "mousetrack.cli:main"
 
 [build-system]
 requires = ["hatchling"]
