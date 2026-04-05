@@ -55,6 +55,30 @@ class HeatmapLoss(nn.Module):
         return self.mse_weight * mse_loss + self.coord_weight * coord_loss
 
 
+def _peak_pixel_error(
+    pred_heatmap: torch.Tensor,
+    target_heatmap: torch.Tensor,
+    video_width: int,
+    video_height: int,
+) -> torch.Tensor:
+    """Return mean Euclidean peak error in original video pixels."""
+    batch_size, _, heatmap_h, heatmap_w = target_heatmap.shape
+
+    target_flat = target_heatmap.view(batch_size, -1)
+    target_max_indices = torch.argmax(target_flat, dim=1)
+    target_y = (target_max_indices // heatmap_w).float() / (heatmap_h - 1)
+    target_x = (target_max_indices % heatmap_w).float() / (heatmap_w - 1)
+
+    pred_flat = pred_heatmap.view(batch_size, -1)
+    pred_max_indices = torch.argmax(pred_flat, dim=1)
+    pred_y = (pred_max_indices // heatmap_w).float() / (heatmap_h - 1)
+    pred_x = (pred_max_indices % heatmap_w).float() / (heatmap_w - 1)
+
+    dx_px = (pred_x - target_x) * (video_width - 1)
+    dy_px = (pred_y - target_y) * (video_height - 1)
+    return torch.sqrt(dx_px**2 + dy_px**2).mean()
+
+
 def train_cnn(
     video_paths: str | list[str],
     annotations_paths: str | list[str],
@@ -219,14 +243,21 @@ def train_cnn(
         # Validation
         model.eval()
         val_loss = 0
+        val_pixel_error = 0.0
+        val_samples = 0
         with torch.no_grad():
             for imgs, targets in val_loader:
                 imgs, targets = imgs.to(device), targets.to(device)
                 pred = model(imgs)
                 loss = criterion(pred, targets)
                 val_loss += loss.item()
+                batch_size = imgs.shape[0]
+                pixel_error = _peak_pixel_error(pred, targets, video_width, video_height)
+                val_pixel_error += pixel_error.item() * batch_size
+                val_samples += batch_size
 
         avg_val_loss = val_loss / len(val_loader)
+        avg_val_pixel_error = val_pixel_error / max(val_samples, 1)
 
         # Step learning rate scheduler
         scheduler.step(avg_val_loss)
@@ -236,6 +267,7 @@ def train_cnn(
         writer.add_scalar("Loss/train_coord", avg_train_loss, epoch)
         writer.add_scalar("Loss/val_coord", avg_val_loss, epoch)
         writer.add_scalar("LearningRate", current_lr, epoch)
+        writer.add_scalar("Metrics/val_peak_error_px", avg_val_pixel_error, epoch)
 
         # Early stopping
         improvement = best_val_loss - avg_val_loss
@@ -252,6 +284,7 @@ def train_cnn(
             {
                 "train_loss": f"{avg_train_loss:.4f}",
                 "val_loss": f"{avg_val_loss:.4f}",
+                "val_px": f"{avg_val_pixel_error:.1f}",
                 "status": status,
             }
         )
