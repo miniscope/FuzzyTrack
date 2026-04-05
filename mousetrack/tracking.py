@@ -100,7 +100,7 @@ def _open_io(video_path: str, output_video: str, output_csv: str):
             os.makedirs(output_dir, exist_ok=True)
 
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    output_width = width * 2
+    output_width = width * 3
     out_video = cv2.VideoWriter(output_video, fourcc, fps, (output_width, height))
     if not out_video.isOpened():
         cap.release()
@@ -127,6 +127,43 @@ def _make_warmup_state(
         heatmap_min_confidence=heatmap_min_confidence,
         coords=[],
     )
+
+
+def _prepare_heatmap_vis(heatmap: np.ndarray, width: int, height: int) -> np.ndarray:
+    """Convert a raw heatmap into an 8-bit image for QC rendering."""
+    heatmap_vis = np.maximum(heatmap, 0.0)
+    heatmap_vis = (heatmap_vis / (heatmap_vis.max() + 1e-8) * 255).astype(np.uint8)
+    return cv2.resize(heatmap_vis, (width, height), interpolation=cv2.INTER_NEAREST)
+
+
+def _annotate_heatmap_panel(
+    panel: np.ndarray,
+    title: str,
+    pixel_x: int,
+    pixel_y: int,
+    heatmap_conf: float | None,
+) -> np.ndarray:
+    """Add overlays to a rendered heatmap QC panel."""
+    cv2.circle(panel, (pixel_x, pixel_y), 8, (255, 255, 255), 2)
+    cv2.putText(
+        panel,
+        title,
+        (20, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        (255, 255, 255),
+        2,
+    )
+    cv2.putText(
+        panel,
+        f"Conf: {heatmap_conf:.3f}" if heatmap_conf is not None else "Conf: N/A",
+        (20, 60),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        (255, 255, 255),
+        2,
+    )
+    return panel
 
 
 def _extract_model_coords(
@@ -268,29 +305,17 @@ def track_video(
             2,
         )
 
-        heatmap_vis = (heatmap / (heatmap.max() + 1e-8) * 255).astype(np.uint8)
-        heatmap_vis = cv2.resize(heatmap_vis, (width, height), interpolation=cv2.INTER_NEAREST)
-        heatmap_colored = cv2.applyColorMap(heatmap_vis, cv2.COLORMAP_JET)
-        cv2.circle(heatmap_colored, (pixel_x, pixel_y), 8, (255, 255, 255), 2)
-        cv2.putText(
-            heatmap_colored,
-            "Heatmap",
-            (20, 30),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (255, 255, 255),
-            2,
+        heatmap_vis = _prepare_heatmap_vis(heatmap, width, height)
+        heatmap_colored = cv2.applyColorMap(heatmap_vis, cv2.COLORMAP_INFERNO)
+        heatmap_blurred = cv2.GaussianBlur(heatmap_vis, (0, 0), sigmaX=6, sigmaY=6)
+        heatmap_blurred_colored = cv2.applyColorMap(heatmap_blurred, cv2.COLORMAP_INFERNO)
+        heatmap_colored = _annotate_heatmap_panel(
+            heatmap_colored, "Heatmap", pixel_x, pixel_y, heatmap_conf
         )
-        cv2.putText(
-            heatmap_colored,
-            f"Conf: {heatmap_conf:.3f}" if heatmap_conf is not None else "Conf: N/A",
-            (20, 60),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (255, 255, 255),
-            2,
+        heatmap_blurred_colored = _annotate_heatmap_panel(
+            heatmap_blurred_colored, "Heatmap (Blurred)", pixel_x, pixel_y, heatmap_conf
         )
-        out_video.write(np.hstack([frame, heatmap_colored]))
+        out_video.write(np.hstack([frame, heatmap_colored, heatmap_blurred_colored]))
 
         pbar.update(1)
         prev_gray = curr_gray
