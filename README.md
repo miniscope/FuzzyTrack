@@ -106,8 +106,8 @@ fuzzytrack track -c config/model_config_cuda.yaml \
   --output output/tracking
 ```
 **Generates:**
-- `output/tracking_heatmap_{timestamp}.csv` (tracking data in DLC format)
-- `output/tracking_heatmap_{timestamp}.mp4` (annotated video)
+- `output/<video_stem>_tracking_heatmap_{timestamp}.csv` (tracking data in DLC format)
+- `output/<video_stem>_tracking_heatmap_{timestamp}.mp4` (annotated video)
 
 Tracking CSV schema:
 - `x`, `y`, `likelihood`
@@ -132,7 +132,7 @@ Recommended release workflow:
 fuzzytrack track -c config/model_config_cuda.yaml -v assets/video.mp4
 
 # 2. In placecell data config:
-# behavior_position: output/tracking_heatmap_YYYYMMDD_HHMMSS.csv
+# behavior_position: output/<video_stem>_tracking_heatmap_YYYYMMDD_HHMMSS.csv
 # bodypart: LED
 #
 # 3. Run zone detection and 1D analysis in placecell

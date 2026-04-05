@@ -209,6 +209,8 @@ __marimo__/
 # Project-specific ignores
 assets/*.mp4
 assets/*.csv
+assets/**/*.csv
+assets/**/*.mp4
 models/*.pth
 output/*
 runs/*

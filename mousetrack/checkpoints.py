@@ -12,7 +12,6 @@ def save_checkpoint(
     state_dict: dict[str, torch.Tensor],
     *,
     backbone: str,
-    use_heatmap: bool,
     heatmap_sigma: float | None,
     img_size: tuple[int, int],
     video_size: tuple[int, int],
@@ -22,7 +21,6 @@ def save_checkpoint(
         "state_dict": state_dict,
         "metadata": {
             "backbone": backbone,
-            "use_heatmap": use_heatmap,
             "heatmap_sigma": heatmap_sigma,
             "img_size": img_size,
             "video_size": video_size,
@@ -36,7 +34,6 @@ def load_checkpoint(
     *,
     device: torch.device,
     expected_backbone: str | None = None,
-    expected_use_heatmap: bool | None = None,
 ) -> tuple[dict[str, torch.Tensor], dict[str, Any]]:
     """Load checkpoint weights and validate stored metadata when available."""
     checkpoint = torch.load(checkpoint_path, map_location=device)
@@ -54,15 +51,5 @@ def load_checkpoint(
             f"Checkpoint backbone mismatch: model uses '{saved_backbone}', "
             f"config requests '{expected_backbone}'."
         )
-
-    saved_use_heatmap = metadata.get("use_heatmap")
-    if expected_use_heatmap is not None and saved_use_heatmap is not None:
-        if saved_use_heatmap != expected_use_heatmap:
-            saved_mode = "heatmap" if saved_use_heatmap else "regression"
-            requested_mode = "heatmap" if expected_use_heatmap else "regression"
-            raise RuntimeError(
-                f"Checkpoint mode mismatch: model was trained for {saved_mode}, "
-                f"config requests {requested_mode}."
-            )
 
     return state_dict, metadata

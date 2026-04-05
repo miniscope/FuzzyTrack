@@ -10,6 +10,8 @@ from .config import load_config
 from .tracking import track_video
 from .training import train_cnn as train_cnn_func
 
+LABEL_SUFFIX = "_labels.csv"
+
 
 def _raise_click_error(func, /, *args, **kwargs):
     """Run a command handler and normalize common failures for CLI output."""
@@ -23,6 +25,11 @@ def _raise_click_error(func, /, *args, **kwargs):
 def main():
     """FuzzyTrack CLI."""
     pass
+
+
+def _default_labels_path(video_path: Path) -> Path:
+    """Return the default annotation CSV path for a video."""
+    return video_path.with_name(f"{video_path.stem}{LABEL_SUFFIX}")
 
 
 @main.command()
@@ -44,7 +51,7 @@ def main():
     "--data-root",
     "-d",
     type=click.Path(exists=True),
-    help="Root directory containing subdirs, each with a .mp4 and .csv file",
+    help="Root directory containing subdirs, each with a .mp4 and a *_labels.csv file",
 )
 @click.option(
     "--config", "-c", required=True, type=click.Path(exists=True), help="Config YAML file"
@@ -66,44 +73,63 @@ def train_cnn(video, annotations, data_root, config, output):
             if not subdir.is_dir():
                 continue
 
-            video_files = list(subdir.glob("*.mp4"))
-            csv_files = list(subdir.glob("*.csv"))
+            video_files = sorted(subdir.glob("*.mp4"))
+            label_files = sorted(subdir.glob(f"*{LABEL_SUFFIX}"))
 
-            if video_files and csv_files:
+            if video_files and label_files:
                 video_list.append(str(video_files[0]))
-                annotations_list.append(str(csv_files[0]))
+                annotations_list.append(str(label_files[0]))
                 click.echo(f"Found: {subdir.name}")
             else:
                 missing = []
                 if not video_files:
                     missing.append("*.mp4")
-                if not csv_files:
-                    missing.append("*.csv")
+                if not label_files:
+                    missing.append(f"*{LABEL_SUFFIX}")
                 click.echo(
                     f"Warning: Skipping {subdir.name} - missing {', '.join(missing)}", err=True
                 )
 
         if not video_list:
             raise click.BadParameter(
-                f"No valid subdirectories found in {data_root}. Each subdirectory should contain a .mp4 and .csv file"
+                f"No valid subdirectories found in {data_root}. Each subdirectory should contain a .mp4 and a *{LABEL_SUFFIX} file"
             )
 
         video = tuple(video_list)
         annotations = tuple(annotations_list)
         click.echo(f"Loaded {len(video)} video/annotation pairs from {data_root}")
     else:
-        if not video or not annotations:
+        if not video:
             raise click.BadParameter(
-                "Must provide either --data-root OR both --video and --annotations"
+                "Must provide either --data-root OR at least one --video"
             )
-        if len(video) != len(annotations):
+        if annotations and len(video) != len(annotations):
             raise click.BadParameter(
                 f"Number of videos ({len(video)}) must match number of annotations ({len(annotations)})"
             )
+        if not annotations:
+            discovered_annotations = []
+            missing_annotations = []
+            for video_path_str in video:
+                video_path = Path(video_path_str)
+                labels_path = _default_labels_path(video_path)
+                if labels_path.exists():
+                    discovered_annotations.append(str(labels_path))
+                else:
+                    missing_annotations.append(str(labels_path))
+
+            if missing_annotations:
+                missing = ", ".join(missing_annotations)
+                raise click.BadParameter(
+                    "No --annotations were provided and the following label files were not found: "
+                    f"{missing}"
+                )
+
+            annotations = tuple(discovered_annotations)
+            click.echo(f"Auto-discovered {len(annotations)} label file(s)")
 
     cfg = load_config(config)
 
-    use_heatmap = cfg["model"]["use_heatmap"]
     backbone = cfg["model"]["backbone"]
     batch_size = cfg["training"]["batch_size"]
     epochs = cfg["training"]["epochs"]
@@ -116,20 +142,16 @@ def train_cnn(video, annotations, data_root, config, output):
     cache_frames = cfg["training"].get("cache_frames", True)
 
     if output is None:
-        output = (
-            "models/mouse_cnn_heatmap.pth" if use_heatmap else "models/mouse_cnn_regression.pth"
-        )
+        output = "models/mouse_cnn_heatmap.pth"
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    model_type = "heatmap" if use_heatmap else "regression"
-    logdir = f"runs/fuzzytrack_{model_type}_{timestamp}"
+    logdir = f"runs/fuzzytrack_heatmap_{timestamp}"
 
     _raise_click_error(
         train_cnn_func,
         video_paths=list(video),
         annotations_paths=list(annotations),
         output_path=output,
-        use_heatmap=use_heatmap,
         batch_size=batch_size,
         max_epochs=epochs,
         patience=patience,
@@ -164,35 +186,28 @@ def track(video, config, cnn_model, output):
     import os
 
     cfg = load_config(config)
+    video_stem = Path(video).stem
 
-    use_heatmap = cfg["model"]["use_heatmap"]
     backbone = cfg["model"]["backbone"]
     smoothing = cfg["tracking"]["smoothing"]
     enable_warmup = cfg["tracking"].get("enable_warmup", True)
-    warmup_frames_heatmap = cfg["tracking"].get("warmup_frames_heatmap", 30)
-    warmup_frames_regression = cfg["tracking"].get("warmup_frames_regression", 5)
-    min_warmup_confident_frames_heatmap = cfg["tracking"].get(
-        "min_warmup_confident_frames_heatmap", 10
-    )
-    min_warmup_confident_frames_regression = cfg["tracking"].get(
-        "min_warmup_confident_frames_regression", 3
-    )
+    warmup_frames = cfg["tracking"].get("warmup_frames", 30)
+    min_warmup_confident_frames = cfg["tracking"].get("min_warmup_confident_frames", 10)
     output_scorer = cfg["tracking"].get("output_scorer", "FuzzyTrack")
     output_bodypart = cfg["tracking"].get("output_bodypart", "LED")
     max_speed = cfg["tracking"].get("max_speed")
     heatmap_min_confidence = cfg["tracking"].get("heatmap_min_confidence", 0.05)
 
-    model_type = "heatmap" if use_heatmap else "regression"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     if cnn_model is None:
-        cnn_model = f"models/mouse_cnn_{model_type}.pth"
+        cnn_model = "models/mouse_cnn_heatmap.pth"
 
     if output is not None:
         output_path = Path(output)
         looks_like_directory = output.endswith(os.sep) or output_path.suffix == ""
         if os.path.isdir(output) or looks_like_directory:
-            base_name = f"tracking_{model_type}_{timestamp}"
+            base_name = f"{video_stem}_tracking_heatmap_{timestamp}"
             output_video = os.path.join(output, f"{base_name}.mp4")
             output_csv = os.path.join(output, f"{base_name}.csv")
         else:
@@ -200,8 +215,8 @@ def track(video, config, cnn_model, output):
             output_video = f"{base_path}.mp4"
             output_csv = f"{base_path}.csv"
     else:
-        output_video = f"output/tracking_{model_type}_{timestamp}.mp4"
-        output_csv = f"output/tracking_{model_type}_{timestamp}.csv"
+        output_video = f"output/{video_stem}_tracking_heatmap_{timestamp}.mp4"
+        output_csv = f"output/{video_stem}_tracking_heatmap_{timestamp}.csv"
 
     _raise_click_error(
         track_video,
@@ -212,13 +227,10 @@ def track(video, config, cnn_model, output):
         max_speed=max_speed,
         smoothing=smoothing,
         backbone=backbone,
-        use_heatmap=use_heatmap,
         heatmap_min_confidence=heatmap_min_confidence,
         enable_warmup=enable_warmup,
-        warmup_frames_heatmap=warmup_frames_heatmap,
-        warmup_frames_regression=warmup_frames_regression,
-        min_warmup_confident_frames_heatmap=min_warmup_confident_frames_heatmap,
-        min_warmup_confident_frames_regression=min_warmup_confident_frames_regression,
+        warmup_frames=warmup_frames,
+        min_warmup_confident_frames=min_warmup_confident_frames,
         output_scorer=output_scorer,
         output_bodypart=output_bodypart,
     )
@@ -237,11 +249,18 @@ def track(video, config, cnn_model, output):
 def annotate(video, input_csv, num_samples):
     """Annotate video frames (coordinates only)."""
     video_path = Path(video)
-    csv_path = video_path.with_suffix(".csv")
+    csv_path = _default_labels_path(video_path)
+    legacy_csv_path = video_path.with_suffix(".csv")
 
-    if input_csv is None and csv_path.exists():
-        input_csv = str(csv_path)
-        click.echo(f"Found existing annotations: {input_csv}")
+    if input_csv is None:
+        if csv_path.exists():
+            input_csv = str(csv_path)
+            click.echo(f"Found existing annotations: {input_csv}")
+        elif legacy_csv_path.exists():
+            input_csv = str(legacy_csv_path)
+            click.echo(
+                f"Found legacy annotations: {input_csv} (will save merged labels to {csv_path})"
+            )
 
     _raise_click_error(
         annotate_video,

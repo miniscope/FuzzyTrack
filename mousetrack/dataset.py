@@ -17,7 +17,6 @@ class FrameDataset(Dataset):
         self,
         video_path,
         csv_path,
-        use_heatmap=True,
         heatmap_sigma=None,
         cache_frames=True,
         is_train=False,
@@ -26,7 +25,6 @@ class FrameDataset(Dataset):
         self.video_info = get_video_info(video_path, require_square=True)
         self.df = self._load_and_validate_annotations(csv_path)
         self.cap = None  # Opened lazily per worker (cv2.VideoCapture is not fork-safe)
-        self.use_heatmap = use_heatmap
         self.heatmap_sigma = heatmap_sigma if heatmap_sigma is not None else HEATMAP_SIGMA
         self.cache_frames = cache_frames
         self.frame_cache = {}
@@ -161,18 +159,11 @@ class FrameDataset(Dataset):
         if self.is_train:
             image, norm_x, norm_y = self._augment(image, norm_x, norm_y)
 
-        coords = np.array([norm_x, norm_y], dtype=np.float32)
-
-        if self.use_heatmap:
-            # Generate heatmap target
-            heatmap = self._generate_heatmap(
-                norm_x, norm_y, HEATMAP_SIZE[0], HEATMAP_SIZE[1], self.heatmap_sigma
-            )
-            # Add channel dimension: (H, W) -> (1, H, W) to match model output
-            heatmap = np.expand_dims(heatmap, axis=0)
-            return torch.tensor(image), torch.tensor(heatmap, dtype=torch.float32)
-        else:
-            return torch.tensor(image), torch.tensor(coords)
+        heatmap = self._generate_heatmap(
+            norm_x, norm_y, HEATMAP_SIZE[0], HEATMAP_SIZE[1], self.heatmap_sigma
+        )
+        heatmap = np.expand_dims(heatmap, axis=0)
+        return torch.tensor(image), torch.tensor(heatmap, dtype=torch.float32)
 
     def _generate_heatmap(self, x, y, h, w, sigma):
         """Generate Gaussian heatmap from normalized coordinates."""

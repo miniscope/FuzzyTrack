@@ -1,6 +1,5 @@
 """Neural network models for FuzzyTrack."""
 
-import torch
 import torch.nn as nn
 import torchvision.models as models
 
@@ -18,20 +17,6 @@ def get_backbone(name: str):
     model_func, weights_name, feature_dim = BACKBONES[name]
     weights = getattr(models, weights_name).IMAGENET1K_V1
     return model_func, weights, feature_dim
-
-
-class MouseCNN(nn.Module):
-    def __init__(self, backbone: str = "resnet18"):
-        super().__init__()
-        model_func, weights, feature_dim = get_backbone(backbone)
-        self.backbone = model_func(weights=weights)
-        self.backbone.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        self.backbone.fc = nn.Identity()
-        self.coord_head = nn.Linear(feature_dim, 2)
-
-    def forward(self, x):
-        features = self.backbone(x)
-        return torch.sigmoid(self.coord_head(features))
 
 
 class MouseHeatmapCNN(nn.Module):

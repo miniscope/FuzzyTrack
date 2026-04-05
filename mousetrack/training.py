@@ -14,12 +14,12 @@ from . import logger
 from .checkpoints import save_checkpoint
 from .config import IMG_SIZE
 from .dataset import FrameDataset
-from .models import MouseCNN, MouseHeatmapCNN
+from .models import MouseHeatmapCNN
 from .video import get_video_info
 
 
 class HeatmapLoss(nn.Module):
-    """Combined MSE + peak coordinate loss for heatmap regression."""
+    """Combined MSE + peak coordinate loss for heatmap training."""
 
     def __init__(self, mse_weight=1.0, coord_weight=10.0):
         super().__init__()
@@ -65,7 +65,6 @@ def train_cnn(
     val_split: float,
     learning_rate: float,
     logdir: str,
-    use_heatmap: bool,
     backbone: str = "resnet18",
     heatmap_sigma: float = None,
     num_workers: int = 4,
@@ -85,7 +84,6 @@ def train_cnn(
         val_split: Validation split ratio
         learning_rate: Learning rate
         logdir: TensorBoard log directory
-        use_heatmap: If True, use heatmap regression instead of direct coordinates
         heatmap_sigma: Gaussian sigma for heatmap target generation
     """
     # Normalize to lists
@@ -105,7 +103,6 @@ def train_cnn(
         ds = FrameDataset(
             video_path,
             annotations_path,
-            use_heatmap=use_heatmap,
             heatmap_sigma=heatmap_sigma,
             cache_frames=cache_frames,
         )
@@ -166,17 +163,12 @@ def train_cnn(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
     logger.info(f"Backbone: {backbone}")
-    if use_heatmap and heatmap_sigma is not None:
+    if heatmap_sigma is not None:
         logger.info(f"Heatmap sigma: {heatmap_sigma}")
 
     # Model and optimizer
-    if use_heatmap:
-        model = MouseHeatmapCNN(backbone=backbone)
-        # Use hybrid loss: MSE + peak coordinate loss
-        criterion = HeatmapLoss(mse_weight=1.0, coord_weight=10.0)
-    else:
-        model = MouseCNN(backbone=backbone)
-        criterion = nn.MSELoss()
+    model = MouseHeatmapCNN(backbone=backbone)
+    criterion = HeatmapLoss(mse_weight=1.0, coord_weight=10.0)
 
     model = model.to(device)
     # Use AdamW with weight decay for regularization
@@ -282,7 +274,6 @@ def train_cnn(
         output_path,
         model.state_dict(),
         backbone=backbone,
-        use_heatmap=use_heatmap,
         heatmap_sigma=heatmap_sigma,
         img_size=IMG_SIZE,
         video_size=(video_width, video_height),

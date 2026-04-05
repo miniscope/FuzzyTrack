@@ -13,7 +13,7 @@ from tqdm import tqdm
 from . import logger
 from .checkpoints import load_checkpoint
 from .config import IMG_SIZE
-from .models import MouseCNN, MouseHeatmapCNN
+from .models import MouseHeatmapCNN
 from .video import get_video_info
 
 
@@ -66,22 +66,14 @@ def extract_coords_from_heatmap(
     return np.array([norm_x, norm_y], dtype=np.float32), float(confidence)
 
 
-def _load_tracking_model(
-    cnn_model_path: str, backbone: str, use_heatmap: bool, device: torch.device
-):
+def _load_tracking_model(cnn_model_path: str, backbone: str, device: torch.device):
     state_dict, _metadata = load_checkpoint(
         cnn_model_path,
         device=device,
         expected_backbone=backbone,
-        expected_use_heatmap=use_heatmap,
     )
-
-    if use_heatmap:
-        cnn = MouseHeatmapCNN(backbone=backbone)
-        logger.info("Loading heatmap CNN model...")
-    else:
-        cnn = MouseCNN(backbone=backbone)
-        logger.info("Loading coordinate CNN model...")
+    cnn = MouseHeatmapCNN(backbone=backbone)
+    logger.info("Loading heatmap CNN model...")
 
     cnn.load_state_dict(state_dict)
     cnn.to(device)
@@ -90,7 +82,7 @@ def _load_tracking_model(
     return cnn
 
 
-def _open_io(video_path: str, output_video: str, output_csv: str, use_heatmap: bool):
+def _open_io(video_path: str, output_video: str, output_csv: str):
     video_info = get_video_info(video_path, require_square=True)
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -108,7 +100,7 @@ def _open_io(video_path: str, output_video: str, output_csv: str, use_heatmap: b
             os.makedirs(output_dir, exist_ok=True)
 
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    output_width = width * 2 if use_heatmap else width
+    output_width = width * 2
     out_video = cv2.VideoWriter(output_video, fourcc, fps, (output_width, height))
     if not out_video.isOpened():
         cap.release()
@@ -119,20 +111,12 @@ def _open_io(video_path: str, output_video: str, output_csv: str, use_heatmap: b
 
 
 def _make_warmup_state(
-    use_heatmap: bool,
     enable_warmup: bool,
-    warmup_frames_heatmap: int,
-    warmup_frames_regression: int,
-    min_warmup_confident_frames_heatmap: int,
-    min_warmup_confident_frames_regression: int,
+    warmup_frames: int,
+    min_warmup_confident_frames: int,
     heatmap_min_confidence: float,
 ) -> WarmupState:
-    warmup_frames = warmup_frames_heatmap if use_heatmap else warmup_frames_regression
-    min_confident_frames = (
-        min_warmup_confident_frames_heatmap
-        if use_heatmap
-        else min_warmup_confident_frames_regression
-    )
+    min_confident_frames = min_warmup_confident_frames
     if not enable_warmup:
         warmup_frames = 0
         min_confident_frames = 0
@@ -147,25 +131,19 @@ def _make_warmup_state(
 
 def _extract_model_coords(
     model_out: torch.Tensor,
-    use_heatmap: bool,
     frame_idx: int,
     warmup: WarmupState,
 ) -> tuple[np.ndarray, float | None, np.ndarray | None]:
-    heatmap_conf = None
-    heatmap = None
-    if use_heatmap:
-        heatmap = model_out[0, 0].cpu().numpy()
-        raw_coords, heatmap_conf = extract_coords_from_heatmap(heatmap, use_weighted_avg=True)
-        if warmup.enabled and frame_idx < warmup.warmup_frames:
-            if heatmap_conf >= warmup.heatmap_min_confidence:
-                warmup.coords.append(raw_coords.copy())
-                raw_coords = np.mean(warmup.coords, axis=0)
-            elif len(warmup.coords) >= warmup.min_confident_frames:
-                raw_coords = np.mean(warmup.coords, axis=0)
-            elif warmup.coords:
-                raw_coords = warmup.coords[-1].copy()
-    else:
-        raw_coords = model_out[0].cpu().numpy()
+    heatmap = model_out[0, 0].cpu().numpy()
+    raw_coords, heatmap_conf = extract_coords_from_heatmap(heatmap, use_weighted_avg=True)
+    if warmup.enabled and frame_idx < warmup.warmup_frames:
+        if heatmap_conf >= warmup.heatmap_min_confidence:
+            warmup.coords.append(raw_coords.copy())
+            raw_coords = np.mean(warmup.coords, axis=0)
+        elif len(warmup.coords) >= warmup.min_confident_frames:
+            raw_coords = np.mean(warmup.coords, axis=0)
+        elif warmup.coords:
+            raw_coords = warmup.coords[-1].copy()
     return raw_coords, heatmap_conf, heatmap
 
 
@@ -221,13 +199,10 @@ def track_video(
     max_speed: float | None = None,
     smoothing: float = 0.5,
     backbone: str = "resnet18",
-    use_heatmap: bool = True,
     heatmap_min_confidence: float = 0.05,
     enable_warmup: bool = True,
-    warmup_frames_heatmap: int = 30,
-    warmup_frames_regression: int = 5,
-    min_warmup_confident_frames_heatmap: int = 10,
-    min_warmup_confident_frames_regression: int = 3,
+    warmup_frames: int = 30,
+    min_warmup_confident_frames: int = 10,
     output_scorer: str = "FuzzyTrack",
     output_bodypart: str = "LED",
 ):
@@ -236,10 +211,8 @@ def track_video(
     logger.info(f"Backbone: {backbone}")
     logger.info(f"Smoothing factor: {smoothing}" + (" (no smoothing)" if smoothing >= 1.0 else ""))
 
-    cnn = _load_tracking_model(cnn_model_path, backbone, use_heatmap, device)
-    cap, out_video, width, height, total_frames = _open_io(
-        video_path, output_video, output_csv, use_heatmap
-    )
+    cnn = _load_tracking_model(cnn_model_path, backbone, device)
+    cap, out_video, width, height, total_frames = _open_io(video_path, output_video, output_csv)
 
     ret, first_frame = cap.read()
     if not ret:
@@ -252,12 +225,9 @@ def track_video(
     prev_gray = cv2.cvtColor(prev_gray, cv2.COLOR_BGR2GRAY)
 
     warmup = _make_warmup_state(
-        use_heatmap=use_heatmap,
         enable_warmup=enable_warmup,
-        warmup_frames_heatmap=warmup_frames_heatmap,
-        warmup_frames_regression=warmup_frames_regression,
-        min_warmup_confident_frames_heatmap=min_warmup_confident_frames_heatmap,
-        min_warmup_confident_frames_regression=min_warmup_confident_frames_regression,
+        warmup_frames=warmup_frames,
+        min_warmup_confident_frames=min_warmup_confident_frames,
         heatmap_min_confidence=heatmap_min_confidence,
     )
 
@@ -278,9 +248,7 @@ def track_video(
         with torch.no_grad():
             model_out = cnn(input_tensor)
 
-        raw_coords, heatmap_conf, heatmap = _extract_model_coords(
-            model_out, use_heatmap, frame_idx, warmup
-        )
+        raw_coords, heatmap_conf, heatmap = _extract_model_coords(model_out, frame_idx, warmup)
         raw_coords = _refine_coords(raw_coords, prev_refined_coords, smoothing, max_speed)
         prev_refined_coords = raw_coords.copy()
 
@@ -300,32 +268,29 @@ def track_video(
             2,
         )
 
-        if use_heatmap:
-            heatmap_vis = (heatmap / (heatmap.max() + 1e-8) * 255).astype(np.uint8)
-            heatmap_vis = cv2.resize(heatmap_vis, (width, height), interpolation=cv2.INTER_NEAREST)
-            heatmap_colored = cv2.applyColorMap(heatmap_vis, cv2.COLORMAP_JET)
-            cv2.circle(heatmap_colored, (pixel_x, pixel_y), 8, (255, 255, 255), 2)
-            cv2.putText(
-                heatmap_colored,
-                "Heatmap",
-                (20, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
-                (255, 255, 255),
-                2,
-            )
-            cv2.putText(
-                heatmap_colored,
-                f"Conf: {heatmap_conf:.3f}" if heatmap_conf is not None else "Conf: N/A",
-                (20, 60),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 255, 255),
-                2,
-            )
-            out_video.write(np.hstack([frame, heatmap_colored]))
-        else:
-            out_video.write(frame)
+        heatmap_vis = (heatmap / (heatmap.max() + 1e-8) * 255).astype(np.uint8)
+        heatmap_vis = cv2.resize(heatmap_vis, (width, height), interpolation=cv2.INTER_NEAREST)
+        heatmap_colored = cv2.applyColorMap(heatmap_vis, cv2.COLORMAP_JET)
+        cv2.circle(heatmap_colored, (pixel_x, pixel_y), 8, (255, 255, 255), 2)
+        cv2.putText(
+            heatmap_colored,
+            "Heatmap",
+            (20, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (255, 255, 255),
+            2,
+        )
+        cv2.putText(
+            heatmap_colored,
+            f"Conf: {heatmap_conf:.3f}" if heatmap_conf is not None else "Conf: N/A",
+            (20, 60),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 255, 255),
+            2,
+        )
+        out_video.write(np.hstack([frame, heatmap_colored]))
 
         pbar.update(1)
         prev_gray = curr_gray
