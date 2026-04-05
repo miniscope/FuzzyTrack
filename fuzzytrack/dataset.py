@@ -10,6 +10,25 @@ from .config import HEATMAP_SIGMA, HEATMAP_SIZE, IMG_SIZE
 from .video import get_video_info
 
 
+def _build_input_frame(
+    prev_frame: np.ndarray,
+    curr_frame: np.ndarray,
+    input_mode: str,
+) -> np.ndarray:
+    """Build a normalized model input tensor from consecutive resized BGR frames."""
+    diff = cv2.absdiff(curr_frame, prev_frame)
+    if input_mode == "grayscale_diff":
+        gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+        return np.expand_dims(gray.astype(np.float32) / 255.0, axis=0)
+    if input_mode == "red_diff":
+        red = diff[:, :, 2].astype(np.float32) / 255.0
+        return np.expand_dims(red, axis=0)
+    if input_mode == "rgb_diff":
+        rgb = cv2.cvtColor(diff, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        return np.transpose(rgb, (2, 0, 1))
+    raise ValueError(f"Unknown input_mode: {input_mode}")
+
+
 class FrameDataset(Dataset):
     """Dataset for CNN training: loads frames and returns motion difference images."""
 
@@ -18,6 +37,7 @@ class FrameDataset(Dataset):
         video_path,
         csv_path,
         heatmap_sigma=None,
+        input_mode="grayscale_diff",
         cache_frames=True,
         is_train=False,
     ):
@@ -26,6 +46,7 @@ class FrameDataset(Dataset):
         self.df = self._load_and_validate_annotations(csv_path)
         self.cap = None  # Opened lazily per worker (cv2.VideoCapture is not fork-safe)
         self.heatmap_sigma = heatmap_sigma if heatmap_sigma is not None else HEATMAP_SIGMA
+        self.input_mode = input_mode
         self.cache_frames = cache_frames
         self.frame_cache = {}
         self.video_size = (self.video_info.width, self.video_info.height)
@@ -93,10 +114,7 @@ class FrameDataset(Dataset):
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             ret, frame = cap.read()
             if ret:
-                # Resize and convert to grayscale immediately to save memory
-                resized = cv2.resize(frame, IMG_SIZE)
-                gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
-                self.frame_cache[frame_idx] = gray
+                self.frame_cache[frame_idx] = cv2.resize(frame, IMG_SIZE)
         cap.release()
 
     def _get_cap(self):
@@ -115,14 +133,9 @@ class FrameDataset(Dataset):
         target_y = row["y"]
 
         if self.cache_frames and frame_idx in self.frame_cache:
-            # Use cached frames (already resized and grayscale)
-            g_curr = self.frame_cache[frame_idx]
-            g_prev = self.frame_cache.get(frame_idx - 1, g_curr) if frame_idx > 0 else g_curr
-
-            # Difference Image (Motion only)
-            diff = cv2.absdiff(g_curr, g_prev)
-            image = diff.astype(np.float32) / 255.0
-            image = np.expand_dims(image, axis=0)  # (1, H, W)
+            curr_small = self.frame_cache[frame_idx]
+            prev_small = self.frame_cache.get(frame_idx - 1, curr_small) if frame_idx > 0 else curr_small
+            image = _build_input_frame(prev_small, curr_small, self.input_mode)
 
             w_orig, h_orig = self.video_size if self.video_size else IMG_SIZE
         else:
@@ -139,16 +152,13 @@ class FrameDataset(Dataset):
                 ret2, frame_curr = cap.read()
 
             if not ret1 or not ret2:
-                image = np.zeros((1, IMG_SIZE[0], IMG_SIZE[1]), dtype=np.float32)
+                channels = 3 if self.input_mode == "rgb_diff" else 1
+                image = np.zeros((channels, IMG_SIZE[0], IMG_SIZE[1]), dtype=np.float32)
                 w_orig, h_orig = IMG_SIZE
             else:
                 f_prev = cv2.resize(frame_prev, IMG_SIZE)
                 f_curr = cv2.resize(frame_curr, IMG_SIZE)
-                g_prev = cv2.cvtColor(f_prev, cv2.COLOR_BGR2GRAY)
-                g_curr = cv2.cvtColor(f_curr, cv2.COLOR_BGR2GRAY)
-                diff = cv2.absdiff(g_curr, g_prev)
-                image = diff.astype(np.float32) / 255.0
-                image = np.expand_dims(image, axis=0)
+                image = _build_input_frame(f_prev, f_curr, self.input_mode)
                 h_orig, w_orig = frame_curr.shape[:2]
 
         # Normalize coordinates
@@ -195,9 +205,8 @@ class FrameDataset(Dataset):
         """
         import random
 
-        # Remove channel dimension: (1, H, W) -> (H, W)
-        image = image[0]
-        h, w = image.shape
+        image = np.moveaxis(image, 0, -1)
+        h, w = image.shape[:2]
 
         # 1. PHOTOMETRIC AUGMENTATIONS (don't affect coordinates)
         # Random brightness (70% to 130%)
@@ -270,7 +279,8 @@ class FrameDataset(Dataset):
             norm_x = np.clip(cx + new_dx, 0, 1)
             norm_y = np.clip(cy + new_dy, 0, 1)
 
-        # Re-add channel dimension: (H, W) -> (1, H, W)
-        image = np.expand_dims(image, axis=0)
+        if image.ndim == 2:
+            image = np.expand_dims(image, axis=-1)
+        image = np.moveaxis(image, -1, 0)
 
         return image, norm_x, norm_y

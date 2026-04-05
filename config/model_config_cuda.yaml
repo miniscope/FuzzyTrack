@@ -1,5 +1,6 @@
 model:
   backbone: resnet18  # resnet18 or resnet50
+  input_mode: grayscale_diff  # grayscale_diff, red_diff, or rgb_diff
 
 heatmap:
   sigma: 3.0  # Gaussian sigma in heatmap pixels on the 56x56 target heatmap

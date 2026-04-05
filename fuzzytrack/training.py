@@ -87,8 +87,12 @@ def _extract_heatmap_coords(
     alpha = float(max(0.0, min(1.0, peak_blend_alpha)))
     coord_x = (1.0 - alpha) * avg_x + alpha * peak_x
     coord_y = (1.0 - alpha) * avg_y + alpha * peak_y
-    norm_x = torch.clamp(coord_x / (heatmap_w - 1), 0.0, 1.0) if heatmap_w > 1 else coord_x.fill_(0.5)
-    norm_y = torch.clamp(coord_y / (heatmap_h - 1), 0.0, 1.0) if heatmap_h > 1 else coord_y.fill_(0.5)
+    norm_x = (
+        torch.clamp(coord_x / (heatmap_w - 1), 0.0, 1.0) if heatmap_w > 1 else coord_x.fill_(0.5)
+    )
+    norm_y = (
+        torch.clamp(coord_y / (heatmap_h - 1), 0.0, 1.0) if heatmap_h > 1 else coord_y.fill_(0.5)
+    )
     return norm_x, norm_y
 
 
@@ -114,6 +118,30 @@ def _pixel_error(
     return torch.sqrt(dx_px**2 + dy_px**2).mean()
 
 
+def _split_train_val_datasets(
+    datasets: list[FrameDataset],
+    val_split: float,
+    seed: int = 42,
+):
+    """Split into train/val datasets with a deterministic frame-wise split."""
+    full_dataset = datasets[0] if len(datasets) == 1 else ConcatDataset(datasets)
+    dataset_size = len(full_dataset)
+    if dataset_size < 2:
+        raise ValueError("Need at least 2 annotated samples to create train/validation splits")
+
+    val_size = int(dataset_size * val_split)
+    val_size = max(1, val_size)
+    val_size = min(val_size, dataset_size - 1)
+    train_size = dataset_size - val_size
+    train_dataset, val_dataset = random_split(
+        full_dataset,
+        [train_size, val_size],
+        generator=torch.Generator().manual_seed(seed),
+    )
+    split_summary = f"frame split ({train_size} train / {val_size} val)"
+    return train_dataset, val_dataset, train_size, val_size, split_summary
+
+
 def train_cnn(
     video_paths: str | list[str],
     annotations_paths: str | list[str],
@@ -125,6 +153,7 @@ def train_cnn(
     learning_rate: float,
     logdir: str,
     backbone: str = "resnet18",
+    input_mode: str = "grayscale_diff",
     heatmap_sigma: float = None,
     peak_blend_alpha: float = 0.25,
     num_workers: int = 4,
@@ -164,26 +193,16 @@ def train_cnn(
             video_path,
             annotations_path,
             heatmap_sigma=heatmap_sigma,
+            input_mode=input_mode,
             cache_frames=cache_frames,
         )
         datasets.append(ds)
         logger.info(f"Loaded {len(ds)} samples from {video_path}")
 
-    # Combine all datasets
-    if len(datasets) == 1:
-        full_dataset = datasets[0]
-    else:
-        full_dataset = ConcatDataset(datasets)
-
-    dataset_size = len(full_dataset)
-    if dataset_size < 2:
-        raise ValueError("Need at least 2 annotated samples to create train/validation splits")
-
-    val_size = int(dataset_size * val_split)
-    val_size = max(1, val_size)
-    val_size = min(val_size, dataset_size - 1)
-    train_size = len(full_dataset) - val_size
-    train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
+    train_dataset, val_dataset, train_size, val_size, split_summary = _split_train_val_datasets(
+        datasets,
+        val_split,
+    )
 
     # Set is_train flag for augmentation
     def set_is_train(dataset, is_train):
@@ -223,11 +242,12 @@ def train_cnn(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
     logger.info(f"Backbone: {backbone}")
+    logger.info(f"Input mode: {input_mode}")
     if heatmap_sigma is not None:
         logger.info(f"Heatmap sigma: {heatmap_sigma}")
 
     # Model and optimizer
-    model = MouseHeatmapCNN(backbone=backbone)
+    model = MouseHeatmapCNN(backbone=backbone, input_mode=input_mode)
     criterion = HeatmapLoss(mse_weight=1.0, coord_weight=10.0)
 
     model = model.to(device)
@@ -255,6 +275,7 @@ def train_cnn(
     best_model_state = None
 
     logger.info(f"Training on {train_size} samples, validating on {val_size} samples")
+    logger.info(f"Validation strategy: {split_summary}")
     logger.info(f"Video dimensions: {video_width}x{video_height}")
 
     pbar = tqdm(range(max_epochs), desc="Training CNN")
@@ -360,6 +381,7 @@ def train_cnn(
         output_path,
         model.state_dict(),
         backbone=backbone,
+        input_mode=input_mode,
         heatmap_sigma=heatmap_sigma,
         img_size=IMG_SIZE,
         video_size=(video_width, video_height),

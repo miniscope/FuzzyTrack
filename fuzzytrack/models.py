@@ -1,5 +1,6 @@
 """Neural network models for FuzzyTrack."""
 
+import torch
 import torch.nn as nn
 import torchvision.models as models
 
@@ -19,15 +20,55 @@ def get_backbone(name: str):
     return model_func, weights, feature_dim
 
 
+def get_input_channels(input_mode: str) -> int:
+    """Return the expected number of input channels for a configured input mode."""
+    input_channels = {
+        "grayscale_diff": 1,
+        "red_diff": 1,
+        "rgb_diff": 3,
+    }
+    if input_mode not in input_channels:
+        raise ValueError(
+            f"Unknown input_mode: {input_mode}. Choose from: {list(input_channels.keys())}"
+        )
+    return input_channels[input_mode]
+
+
+def _make_input_conv(conv1: nn.Conv2d, input_channels: int) -> nn.Conv2d:
+    """Adapt a pretrained ResNet stem to the requested input channel count."""
+    if input_channels == conv1.in_channels:
+        return conv1
+
+    new_conv = nn.Conv2d(
+        input_channels,
+        conv1.out_channels,
+        kernel_size=conv1.kernel_size,
+        stride=conv1.stride,
+        padding=conv1.padding,
+        bias=False,
+    )
+
+    with torch.no_grad():
+        if input_channels == 1:
+            new_conv.weight.copy_(conv1.weight.mean(dim=1, keepdim=True))
+        else:
+            repeat_count = (input_channels + conv1.in_channels - 1) // conv1.in_channels
+            repeated = conv1.weight.repeat(1, repeat_count, 1, 1)[:, :input_channels]
+            repeated *= conv1.in_channels / input_channels
+            new_conv.weight.copy_(repeated)
+    return new_conv
+
+
 class MouseHeatmapCNN(nn.Module):
     """CNN that predicts a heatmap instead of direct coordinates."""
 
-    def __init__(self, backbone: str = "resnet18"):
+    def __init__(self, backbone: str = "resnet18", input_mode: str = "grayscale_diff"):
         super().__init__()
         model_func, weights, feature_dim = get_backbone(backbone)
+        input_channels = get_input_channels(input_mode)
         # Use backbone but remove final pooling to get spatial features
         bb = model_func(weights=weights)
-        bb.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        bb.conv1 = _make_input_conv(bb.conv1, input_channels)
 
         # Remove avgpool and fc, keep only conv layers
         self.backbone = nn.Sequential(*list(bb.children())[:-2])  # Remove avgpool and fc

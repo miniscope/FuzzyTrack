@@ -15,6 +15,7 @@ HEATMAP_SIGMA = 3.0  # Gaussian sigma for heatmap generation (default, can be ov
 DEFAULT_CONFIG = {
     "model": {
         "backbone": "resnet18",
+        "input_mode": "grayscale_diff",
     },
     "heatmap": {
         "sigma": HEATMAP_SIGMA,

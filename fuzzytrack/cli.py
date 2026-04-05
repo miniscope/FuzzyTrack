@@ -10,7 +10,7 @@ from .annotation import annotate_video
 from .config import load_config
 from .tracking import track_video
 from .training import train_cnn as train_cnn_func
-from .video import get_video_info
+from .video import get_video_info, mask_video
 
 LABEL_SUFFIX = "_labels.csv"
 
@@ -198,6 +198,7 @@ def train_cnn(video, annotations, data_root, config, output):
     cfg = load_config(config)
 
     backbone = cfg["model"]["backbone"]
+    input_mode = cfg["model"].get("input_mode", "grayscale_diff")
     batch_size = cfg["training"]["batch_size"]
     epochs = cfg["training"]["epochs"]
     patience = cfg["training"]["patience"]
@@ -227,6 +228,7 @@ def train_cnn(video, annotations, data_root, config, output):
         learning_rate=learning_rate,
         logdir=logdir,
         backbone=backbone,
+        input_mode=input_mode,
         heatmap_sigma=heatmap_sigma,
         peak_blend_alpha=peak_blend_alpha,
         num_workers=num_workers,
@@ -258,6 +260,7 @@ def track(video, config, cnn_model, output):
     video_stem = Path(video).stem
 
     backbone = cfg["model"]["backbone"]
+    input_mode = cfg["model"].get("input_mode", "grayscale_diff")
     smoothing = cfg["tracking"]["smoothing"]
     peak_blend_alpha = cfg["tracking"].get("peak_blend_alpha", 0.25)
     enable_warmup = cfg["tracking"].get("enable_warmup", True)
@@ -298,6 +301,7 @@ def track(video, config, cnn_model, output):
         smoothing=smoothing,
         peak_blend_alpha=peak_blend_alpha,
         backbone=backbone,
+        input_mode=input_mode,
         heatmap_min_confidence=heatmap_min_confidence,
         enable_warmup=enable_warmup,
         warmup_frames=warmup_frames,
@@ -340,6 +344,28 @@ def annotate(video, input_csv, num_samples):
         num_samples=num_samples,
         input_csv=input_csv,
     )
+
+
+@main.command("mask")
+@click.option("--video", "-v", required=True, type=click.Path(exists=True), help="Input video")
+@click.option(
+    "--mask", "-m", "mask_path", required=True, type=click.Path(exists=True), help="Binary PNG mask"
+)
+@click.option(
+    "--output",
+    "-o",
+    default=None,
+    type=click.Path(),
+    help="Output masked video path (default: <video_stem>_masked.mp4)",
+)
+def mask(video, mask_path, output):
+    """Apply a binary PNG mask to a video."""
+    video_path = Path(video)
+    if output is None:
+        output = str(video_path.with_name(f"{video_path.stem}_masked.mp4"))
+
+    _raise_click_error(mask_video, video_path=video, mask_path=mask_path, output_path=output)
+    click.echo(f"Masked video saved to {output}")
 
 
 @main.command("coverage")

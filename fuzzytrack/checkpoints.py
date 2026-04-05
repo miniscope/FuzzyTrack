@@ -12,6 +12,7 @@ def save_checkpoint(
     state_dict: dict[str, torch.Tensor],
     *,
     backbone: str,
+    input_mode: str,
     heatmap_sigma: float | None,
     img_size: tuple[int, int],
     video_size: tuple[int, int],
@@ -21,6 +22,7 @@ def save_checkpoint(
         "state_dict": state_dict,
         "metadata": {
             "backbone": backbone,
+            "input_mode": input_mode,
             "heatmap_sigma": heatmap_sigma,
             "img_size": img_size,
             "video_size": video_size,
@@ -34,6 +36,7 @@ def load_checkpoint(
     *,
     device: torch.device,
     expected_backbone: str | None = None,
+    expected_input_mode: str | None = None,
 ) -> tuple[dict[str, torch.Tensor], dict[str, Any]]:
     """Load checkpoint weights and validate stored metadata when available."""
     checkpoint = torch.load(checkpoint_path, map_location=device)
@@ -50,6 +53,13 @@ def load_checkpoint(
         raise RuntimeError(
             f"Checkpoint backbone mismatch: model uses '{saved_backbone}', "
             f"config requests '{expected_backbone}'."
+        )
+
+    saved_input_mode = metadata.get("input_mode")
+    if expected_input_mode is not None and saved_input_mode and saved_input_mode != expected_input_mode:
+        raise RuntimeError(
+            f"Checkpoint input_mode mismatch: model uses '{saved_input_mode}', "
+            f"config requests '{expected_input_mode}'."
         )
 
     return state_dict, metadata

@@ -30,6 +30,7 @@ All parameters can be set in either file:
 ```yaml
 model:
   backbone: resnet50  # resnet18 or resnet50
+  input_mode: grayscale_diff  # grayscale_diff, red_diff, or rgb_diff
 
 heatmap:
   sigma: 3.0  # Gaussian sigma in heatmap pixels on the 56x56 target heatmap
@@ -39,7 +40,7 @@ training:
   epochs: 1000
   patience: 50
   learning_rate: 0.0005
-  val_split: 0.2
+  val_split: 0.2  # Frame-wise validation fraction
   num_workers: 8
   pin_memory: true
   cache_frames: true

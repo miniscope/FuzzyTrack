@@ -13,6 +13,7 @@ from tqdm import tqdm
 from . import logger
 from .checkpoints import load_checkpoint
 from .config import IMG_SIZE
+from .dataset import _build_input_frame
 from .models import MouseHeatmapCNN
 from .video import get_video_info
 
@@ -72,13 +73,19 @@ def extract_coords_from_heatmap(
     return np.array([norm_x, norm_y], dtype=np.float32), float(confidence)
 
 
-def _load_tracking_model(cnn_model_path: str, backbone: str, device: torch.device):
+def _load_tracking_model(
+    cnn_model_path: str,
+    backbone: str,
+    input_mode: str,
+    device: torch.device,
+):
     state_dict, _metadata = load_checkpoint(
         cnn_model_path,
         device=device,
         expected_backbone=backbone,
+        expected_input_mode=input_mode,
     )
-    cnn = MouseHeatmapCNN(backbone=backbone)
+    cnn = MouseHeatmapCNN(backbone=backbone, input_mode=input_mode)
     logger.info("Loading heatmap CNN model...")
 
     cnn.load_state_dict(state_dict)
@@ -246,6 +253,7 @@ def track_video(
     smoothing: float = 0.5,
     peak_blend_alpha: float = 0.25,
     backbone: str = "resnet18",
+    input_mode: str = "grayscale_diff",
     heatmap_min_confidence: float = 0.05,
     enable_warmup: bool = True,
     warmup_frames: int = 30,
@@ -256,10 +264,11 @@ def track_video(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
     logger.info(f"Backbone: {backbone}")
+    logger.info(f"Input mode: {input_mode}")
     logger.info(f"Smoothing factor: {smoothing}" + (" (no smoothing)" if smoothing >= 1.0 else ""))
     logger.info(f"Peak blend alpha: {peak_blend_alpha}")
 
-    cnn = _load_tracking_model(cnn_model_path, backbone, device)
+    cnn = _load_tracking_model(cnn_model_path, backbone, input_mode, device)
     cap, out_video, width, height, total_frames = _open_io(video_path, output_video, output_csv)
 
     ret, first_frame = cap.read()
@@ -269,8 +278,7 @@ def track_video(
         out_video.release()
         return
 
-    prev_gray = cv2.resize(first_frame, IMG_SIZE)
-    prev_gray = cv2.cvtColor(prev_gray, cv2.COLOR_BGR2GRAY)
+    prev_small = cv2.resize(first_frame, IMG_SIZE)
 
     warmup = _make_warmup_state(
         enable_warmup=enable_warmup,
@@ -288,10 +296,8 @@ def track_video(
     frame = first_frame
     while True:
         curr_small = cv2.resize(frame, IMG_SIZE)
-        curr_gray = cv2.cvtColor(curr_small, cv2.COLOR_BGR2GRAY)
-        diff = cv2.absdiff(curr_gray, prev_gray)
-        input_img = diff.astype(np.float32) / 255.0
-        input_tensor = torch.tensor(input_img).unsqueeze(0).unsqueeze(0).to(device)
+        input_img = _build_input_frame(prev_small, curr_small, input_mode)
+        input_tensor = torch.tensor(input_img).unsqueeze(0).to(device)
 
         with torch.no_grad():
             model_out = cnn(input_tensor)
@@ -331,7 +337,7 @@ def track_video(
         out_video.write(np.hstack([frame, heatmap_colored, heatmap_blurred_colored]))
 
         pbar.update(1)
-        prev_gray = curr_gray
+        prev_small = curr_small
         frame_idx += 1
 
         ret, frame = cap.read()
