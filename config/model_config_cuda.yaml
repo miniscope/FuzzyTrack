@@ -1,11 +1,11 @@
 model:
-  backbone: resnet50  # resnet18 or resnet50
+  backbone: resnet18  # resnet18 or resnet50
 
 heatmap:
   sigma: 3.0  # Gaussian sigma in heatmap pixels on the 56x56 target heatmap
 
 training:
-  batch_size: 8  # Tuned for the CUDA training machine
+  batch_size: 4 # Tuned for the CUDA training machine
   epochs: 1000
   patience: 50
   learning_rate: 0.0005
