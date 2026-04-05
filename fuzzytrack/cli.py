@@ -100,9 +100,7 @@ def train_cnn(video, annotations, data_root, config, output):
         click.echo(f"Loaded {len(video)} video/annotation pairs from {data_root}")
     else:
         if not video:
-            raise click.BadParameter(
-                "Must provide either --data-root OR at least one --video"
-            )
+            raise click.BadParameter("Must provide either --data-root OR at least one --video")
         if annotations and len(video) != len(annotations):
             raise click.BadParameter(
                 f"Number of videos ({len(video)}) must match number of annotations ({len(annotations)})"
