@@ -46,6 +46,7 @@ training:
 
 tracking:
   smoothing: 0.2          # EMA smoothing (0.0-1.0, lower=smoother, 1.0=no smoothing)
+  peak_blend_alpha: 0.25  # 0.0 = weighted average, 1.0 = argmax peak
   enable_warmup: true
   warmup_frames: 30
   min_warmup_confident_frames: 10

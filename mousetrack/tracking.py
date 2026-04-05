@@ -27,9 +27,13 @@ class WarmupState:
 
 
 def extract_coords_from_heatmap(
-    heatmap: np.ndarray, use_weighted_avg: bool = True
+    heatmap: np.ndarray, peak_blend_alpha: float = 0.0
 ) -> tuple[np.ndarray, float]:
-    """Extract coordinates from a heatmap output."""
+    """Extract coordinates from a heatmap output.
+
+    peak_blend_alpha blends between weighted-average coordinates (0.0)
+    and argmax peak coordinates (1.0).
+    """
     if heatmap.ndim == 3:
         heatmap = heatmap[0]
 
@@ -47,19 +51,21 @@ def extract_coords_from_heatmap(
     else:
         confidence = 0.0
 
-    if use_weighted_avg:
-        if total > 0:
-            y_coords, x_coords = np.ogrid[:h, :w]
-            hm_x = np.sum(heatmap * x_coords) / total
-            hm_y = np.sum(heatmap * y_coords) / total
-            hm_x = np.clip(hm_x, 0.0, w - 1.0)
-            hm_y = np.clip(hm_y, 0.0, h - 1.0)
-        else:
-            hm_x = (w - 1) / 2.0
-            hm_y = (h - 1) / 2.0
-            confidence = 0.0
+    if total > 0:
+        y_coords, x_coords = np.ogrid[:h, :w]
+        avg_x = np.sum(heatmap * x_coords) / total
+        avg_y = np.sum(heatmap * y_coords) / total
+        avg_x = np.clip(avg_x, 0.0, w - 1.0)
+        avg_y = np.clip(avg_y, 0.0, h - 1.0)
+
+        peak_y, peak_x = np.unravel_index(np.argmax(heatmap), heatmap.shape)
+        alpha = float(np.clip(peak_blend_alpha, 0.0, 1.0))
+        hm_x = (1.0 - alpha) * avg_x + alpha * peak_x
+        hm_y = (1.0 - alpha) * avg_y + alpha * peak_y
     else:
-        hm_y, hm_x = np.unravel_index(np.argmax(heatmap), heatmap.shape)
+        hm_x = (w - 1) / 2.0
+        hm_y = (h - 1) / 2.0
+        confidence = 0.0
 
     norm_x = np.clip(hm_x / (w - 1) if w > 1 else 0.5, 0.0, 1.0)
     norm_y = np.clip(hm_y / (h - 1) if h > 1 else 0.5, 0.0, 1.0)
@@ -170,9 +176,12 @@ def _extract_model_coords(
     model_out: torch.Tensor,
     frame_idx: int,
     warmup: WarmupState,
+    peak_blend_alpha: float,
 ) -> tuple[np.ndarray, float | None, np.ndarray | None]:
     heatmap = model_out[0, 0].cpu().numpy()
-    raw_coords, heatmap_conf = extract_coords_from_heatmap(heatmap, use_weighted_avg=True)
+    raw_coords, heatmap_conf = extract_coords_from_heatmap(
+        heatmap, peak_blend_alpha=peak_blend_alpha
+    )
     if warmup.enabled and frame_idx < warmup.warmup_frames:
         if heatmap_conf >= warmup.heatmap_min_confidence:
             warmup.coords.append(raw_coords.copy())
@@ -235,6 +244,7 @@ def track_video(
     output_csv: str,
     max_speed: float | None = None,
     smoothing: float = 0.5,
+    peak_blend_alpha: float = 0.25,
     backbone: str = "resnet18",
     heatmap_min_confidence: float = 0.05,
     enable_warmup: bool = True,
@@ -247,6 +257,7 @@ def track_video(
     logger.info(f"Using device: {device}")
     logger.info(f"Backbone: {backbone}")
     logger.info(f"Smoothing factor: {smoothing}" + (" (no smoothing)" if smoothing >= 1.0 else ""))
+    logger.info(f"Peak blend alpha: {peak_blend_alpha}")
 
     cnn = _load_tracking_model(cnn_model_path, backbone, device)
     cap, out_video, width, height, total_frames = _open_io(video_path, output_video, output_csv)
@@ -285,7 +296,9 @@ def track_video(
         with torch.no_grad():
             model_out = cnn(input_tensor)
 
-        raw_coords, heatmap_conf, heatmap = _extract_model_coords(model_out, frame_idx, warmup)
+        raw_coords, heatmap_conf, heatmap = _extract_model_coords(
+            model_out, frame_idx, warmup, peak_blend_alpha
+        )
         raw_coords = _refine_coords(raw_coords, prev_refined_coords, smoothing, max_speed)
         prev_refined_coords = raw_coords.copy()
 

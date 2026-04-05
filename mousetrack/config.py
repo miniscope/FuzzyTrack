@@ -28,6 +28,7 @@ DEFAULT_CONFIG = {
     },
     "tracking": {
         "smoothing": 0.5,
+        "peak_blend_alpha": 0.5,
         "enable_warmup": True,
         "warmup_frames": 30,
         "min_warmup_confident_frames": 10,

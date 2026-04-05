@@ -190,6 +190,7 @@ def track(video, config, cnn_model, output):
 
     backbone = cfg["model"]["backbone"]
     smoothing = cfg["tracking"]["smoothing"]
+    peak_blend_alpha = cfg["tracking"].get("peak_blend_alpha", 0.25)
     enable_warmup = cfg["tracking"].get("enable_warmup", True)
     warmup_frames = cfg["tracking"].get("warmup_frames", 30)
     min_warmup_confident_frames = cfg["tracking"].get("min_warmup_confident_frames", 10)
@@ -226,6 +227,7 @@ def track(video, config, cnn_model, output):
         output_csv=output_csv,
         max_speed=max_speed,
         smoothing=smoothing,
+        peak_blend_alpha=peak_blend_alpha,
         backbone=backbone,
         heatmap_min_confidence=heatmap_min_confidence,
         enable_warmup=enable_warmup,
