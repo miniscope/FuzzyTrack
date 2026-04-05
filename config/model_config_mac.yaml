@@ -1,0 +1,25 @@
+model:
+  backbone: resnet50  # resnet18 or resnet50
+
+heatmap:
+  sigma: 3.0  # Gaussian sigma in heatmap pixels on the 56x56 target heatmap
+
+training:
+  batch_size: 8  # Keep consistent behavior, but use lighter loader settings on macOS
+  epochs: 1000
+  patience: 50
+  learning_rate: 0.0005
+  val_split: 0.2
+  num_workers: 4
+  pin_memory: false
+  cache_frames: true
+
+tracking:
+  smoothing: 0.2
+  enable_warmup: true
+  warmup_frames: 30
+  min_warmup_confident_frames: 10
+  output_scorer: FuzzyTrack
+  output_bodypart: LED
+  heatmap_min_confidence: 0.4  # Entropy-based confidence in [0, 1]
+  # max_speed: 0.1  # Optional normalized per-frame movement cap

@@ -8,14 +8,28 @@ Tracking package for fuzzy videos.
 uv sync
 ```
 
+Requires Python 3.11 or newer.
+
+For development tools:
+
+```bash
+uv sync --group dev
+make lint
+make format
+```
+
 ## Configuration
 
-All parameters can be set in `config/model_config.yaml`:
+Runtime configs:
+
+- `config/model_config_cuda.yaml` for CUDA training/inference
+- `config/model_config_mac.yaml` for local macOS use
+
+All parameters can be set in either file:
 
 ```yaml
 model:
   backbone: resnet50  # resnet18 or resnet50
-  use_heatmap: true   # true for heatmap mode, false for regression
 
 heatmap:
   sigma: 3.0  # Gaussian sigma in heatmap pixels on the 56x56 target heatmap
@@ -33,10 +47,8 @@ training:
 tracking:
   smoothing: 0.2          # EMA smoothing (0.0-1.0, lower=smoother, 1.0=no smoothing)
   enable_warmup: true
-  warmup_frames_heatmap: 30
-  warmup_frames_regression: 5
-  min_warmup_confident_frames_heatmap: 10
-  min_warmup_confident_frames_regression: 3
+  warmup_frames: 30
+  min_warmup_confident_frames: 10
   output_scorer: FuzzyTrack
   output_bodypart: LED
   heatmap_min_confidence: 0.4
@@ -56,41 +68,46 @@ Maze zone detection and 1D serialization are intentionally handled in `placecell
 ```bash
 fuzzytrack annotate --video assets/video.mp4
 ```
-Annotates sampled frames with mouse coordinates. Output is written automatically to a CSV with the same stem as the video.
+Annotates sampled frames with mouse coordinates. Output is written automatically to a labels CSV with the same stem as the video.
 
-**Generates:** `assets/video.csv` (training annotations)
+**Generates:** `assets/video_labels.csv` (training annotations)
 
 ### 2. Train CNN (coordinate prediction)
 ```bash
-# Single video
-fuzzytrack train-cnn -c config/model_config.yaml -v assets/video.mp4 -a assets/video.csv
+# Single video (auto-discovers assets/video_labels.csv)
+fuzzytrack train-cnn -c config/model_config_cuda.yaml -v assets/video.mp4
 
-# Multiple videos
-fuzzytrack train-cnn -c config/model_config.yaml \
-  -v assets/video1.mp4 -a assets/video1.csv \
-  -v assets/video2.mp4 -a assets/video2.csv
+# Multiple videos (auto-discovers matching *_labels.csv files)
+fuzzytrack train-cnn -c config/model_config_cuda.yaml \
+  -v assets/video1.mp4 \
+  -v assets/video2.mp4
 
-# Dataset directory mode: each subdirectory contains one .mp4 and one .csv
-fuzzytrack train-cnn -c config/model_config.yaml --data-root assets/dataset
+# Explicit labels also work
+fuzzytrack train-cnn -c config/model_config_cuda.yaml \
+  -v assets/video1.mp4 -a assets/video1_labels.csv \
+  -v assets/video2.mp4 -a assets/video2_labels.csv
+
+# Dataset directory mode: each subdirectory contains one .mp4 and one *_labels.csv
+fuzzytrack train-cnn -c config/model_config_cuda.yaml --data-root assets/dataset
 ```
 **Generates:**
-- `models/mouse_cnn_heatmap.pth` or `models/mouse_cnn_regression.pth` (trained model)
-- `runs/fuzzytrack_{heatmap|regression}_{timestamp}/` (TensorBoard logs)
+- `models/mouse_cnn_heatmap.pth` (trained model)
+- `runs/fuzzytrack_heatmap_{timestamp}/` (TensorBoard logs)
 
 ### 3. Run Tracking
 ```bash
 # Basic tracking
-fuzzytrack track -c config/model_config.yaml -v assets/video.mp4
+fuzzytrack track -c config/model_config_cuda.yaml -v assets/video.mp4
 
 # Custom model and output base path
-fuzzytrack track -c config/model_config.yaml \
+fuzzytrack track -c config/model_config_cuda.yaml \
   -v assets/video.mp4 \
   --cnn-model models/mouse_cnn_heatmap.pth \
   --output output/tracking
 ```
 **Generates:**
-- `output/tracking_{heatmap|regression}_{timestamp}.csv` (tracking data in DLC format)
-- `output/tracking_{heatmap|regression}_{timestamp}.mp4` (annotated video)
+- `output/tracking_heatmap_{timestamp}.csv` (tracking data in DLC format)
+- `output/tracking_heatmap_{timestamp}.mp4` (annotated video)
 
 Tracking CSV schema:
 - `x`, `y`, `likelihood`
@@ -102,9 +119,9 @@ Tracking CSV schema:
 - Output CSVs use a DLC-style 3-level header: `scorer`, `bodyparts`, `coords`
 - The tracked coordinate columns are always `x`, `y`, and `likelihood`
 - The first processed frame is included in the output; because tracking uses frame differences, frame 0 is effectively a zero-motion initialization frame
-- Heatmap models report an entropy-based `likelihood`; regression models currently write `0.0` in that column
+- `likelihood` is entropy-based heatmap confidence
 - The tracking video is a QC artifact; the CSV is the canonical output for downstream analysis
-- Model checkpoints now store training metadata and tracking validates backbone/mode compatibility when available
+- Model checkpoints now store training metadata and tracking validates backbone compatibility when available
 
 ## Placecell Integration
 
@@ -112,7 +129,7 @@ Recommended release workflow:
 
 ```bash
 # 1. Track in FuzzyTrack
-fuzzytrack track -c config/model_config.yaml -v assets/video.mp4
+fuzzytrack track -c config/model_config_cuda.yaml -v assets/video.mp4
 
 # 2. In placecell data config:
 # behavior_position: output/tracking_heatmap_YYYYMMDD_HHMMSS.csv
@@ -129,6 +146,6 @@ This keeps tracking and analysis responsibilities separate and avoids divergence
 Video -> CNN -> EMA Smoothing -> DLC CSV
 ```
 
-- **CNN**: Finds mouse coordinates from frames (supports direct regression or heatmap)
+- **CNN**: Finds mouse coordinates from frames via heatmap prediction
 - **EMA Smoothing**: Reduces jitter from noise/scattering
 - **DLC CSV**: Exports raw coordinates for downstream analysis in `placecell`
