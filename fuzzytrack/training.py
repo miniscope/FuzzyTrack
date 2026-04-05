@@ -55,13 +55,51 @@ class HeatmapLoss(nn.Module):
         return self.mse_weight * mse_loss + self.coord_weight * coord_loss
 
 
-def _peak_pixel_error(
+def _extract_heatmap_coords(
+    heatmap: torch.Tensor,
+    peak_blend_alpha: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Extract normalized x/y coordinates from a batch of heatmaps."""
+    batch_size, _, heatmap_h, heatmap_w = heatmap.shape
+    heatmap = torch.clamp(heatmap, min=0.0)
+    flat = heatmap.view(batch_size, -1)
+    max_indices = torch.argmax(flat, dim=1)
+    peak_y = (max_indices // heatmap_w).float()
+    peak_x = (max_indices % heatmap_w).float()
+
+    total = flat.sum(dim=1)
+    avg_x = torch.full_like(peak_x, (heatmap_w - 1) / 2.0)
+    avg_y = torch.full_like(peak_y, (heatmap_h - 1) / 2.0)
+
+    valid = total > 0
+    if valid.any():
+        y_coords = torch.arange(heatmap_h, device=heatmap.device, dtype=heatmap.dtype).view(
+            1, heatmap_h, 1
+        )
+        x_coords = torch.arange(heatmap_w, device=heatmap.device, dtype=heatmap.dtype).view(
+            1, 1, heatmap_w
+        )
+        avg_x_valid = (heatmap[valid, 0] * x_coords).sum(dim=(1, 2)) / total[valid]
+        avg_y_valid = (heatmap[valid, 0] * y_coords).sum(dim=(1, 2)) / total[valid]
+        avg_x[valid] = avg_x_valid
+        avg_y[valid] = avg_y_valid
+
+    alpha = float(max(0.0, min(1.0, peak_blend_alpha)))
+    coord_x = (1.0 - alpha) * avg_x + alpha * peak_x
+    coord_y = (1.0 - alpha) * avg_y + alpha * peak_y
+    norm_x = torch.clamp(coord_x / (heatmap_w - 1), 0.0, 1.0) if heatmap_w > 1 else coord_x.fill_(0.5)
+    norm_y = torch.clamp(coord_y / (heatmap_h - 1), 0.0, 1.0) if heatmap_h > 1 else coord_y.fill_(0.5)
+    return norm_x, norm_y
+
+
+def _pixel_error(
     pred_heatmap: torch.Tensor,
     target_heatmap: torch.Tensor,
     video_width: int,
     video_height: int,
+    peak_blend_alpha: float,
 ) -> torch.Tensor:
-    """Return mean Euclidean peak error in original video pixels."""
+    """Return mean Euclidean coordinate error in original video pixels."""
     batch_size, _, heatmap_h, heatmap_w = target_heatmap.shape
 
     target_flat = target_heatmap.view(batch_size, -1)
@@ -69,10 +107,7 @@ def _peak_pixel_error(
     target_y = (target_max_indices // heatmap_w).float() / (heatmap_h - 1)
     target_x = (target_max_indices % heatmap_w).float() / (heatmap_w - 1)
 
-    pred_flat = pred_heatmap.view(batch_size, -1)
-    pred_max_indices = torch.argmax(pred_flat, dim=1)
-    pred_y = (pred_max_indices // heatmap_w).float() / (heatmap_h - 1)
-    pred_x = (pred_max_indices % heatmap_w).float() / (heatmap_w - 1)
+    pred_x, pred_y = _extract_heatmap_coords(pred_heatmap, peak_blend_alpha)
 
     dx_px = (pred_x - target_x) * (video_width - 1)
     dy_px = (pred_y - target_y) * (video_height - 1)
@@ -91,6 +126,7 @@ def train_cnn(
     logdir: str,
     backbone: str = "resnet18",
     heatmap_sigma: float = None,
+    peak_blend_alpha: float = 0.25,
     num_workers: int = 4,
     pin_memory: bool = True,
     cache_frames: bool = True,
@@ -213,6 +249,8 @@ def train_cnn(
 
     # Training loop
     best_val_loss = float("inf")
+    best_val_track_pixel_error = float("inf")
+    best_val_argmax_pixel_error = float("inf")
     patience_counter = 0
     best_model_state = None
 
@@ -243,7 +281,8 @@ def train_cnn(
         # Validation
         model.eval()
         val_loss = 0
-        val_pixel_error = 0.0
+        val_track_pixel_error = 0.0
+        val_argmax_pixel_error = 0.0
         val_samples = 0
         with torch.no_grad():
             for imgs, targets in val_loader:
@@ -252,12 +291,17 @@ def train_cnn(
                 loss = criterion(pred, targets)
                 val_loss += loss.item()
                 batch_size = imgs.shape[0]
-                pixel_error = _peak_pixel_error(pred, targets, video_width, video_height)
-                val_pixel_error += pixel_error.item() * batch_size
+                track_pixel_error = _pixel_error(
+                    pred, targets, video_width, video_height, peak_blend_alpha
+                )
+                argmax_pixel_error = _pixel_error(pred, targets, video_width, video_height, 1.0)
+                val_track_pixel_error += track_pixel_error.item() * batch_size
+                val_argmax_pixel_error += argmax_pixel_error.item() * batch_size
                 val_samples += batch_size
 
         avg_val_loss = val_loss / len(val_loader)
-        avg_val_pixel_error = val_pixel_error / max(val_samples, 1)
+        avg_val_track_pixel_error = val_track_pixel_error / max(val_samples, 1)
+        avg_val_argmax_pixel_error = val_argmax_pixel_error / max(val_samples, 1)
 
         # Step learning rate scheduler
         scheduler.step(avg_val_loss)
@@ -267,12 +311,15 @@ def train_cnn(
         writer.add_scalar("Loss/train_coord", avg_train_loss, epoch)
         writer.add_scalar("Loss/val_coord", avg_val_loss, epoch)
         writer.add_scalar("LearningRate", current_lr, epoch)
-        writer.add_scalar("Metrics/val_peak_error_px", avg_val_pixel_error, epoch)
+        writer.add_scalar("Metrics/val_track_error_px", avg_val_track_pixel_error, epoch)
+        writer.add_scalar("Metrics/val_argmax_error_px", avg_val_argmax_pixel_error, epoch)
 
         # Early stopping
         improvement = best_val_loss - avg_val_loss
         if improvement > 1e-4:
             best_val_loss = avg_val_loss
+            best_val_track_pixel_error = avg_val_track_pixel_error
+            best_val_argmax_pixel_error = avg_val_argmax_pixel_error
             patience_counter = 0
             best_model_state = copy.deepcopy(model.state_dict())
             status = "★ BEST"
@@ -284,7 +331,8 @@ def train_cnn(
             {
                 "train_loss": f"{avg_train_loss:.4f}",
                 "val_loss": f"{avg_val_loss:.4f}",
-                "val_px": f"{avg_val_pixel_error:.1f}",
+                "val_px_track": f"{avg_val_track_pixel_error:.1f}",
+                "val_px_argmax": f"{avg_val_argmax_pixel_error:.1f}",
                 "status": status,
             }
         )
@@ -296,7 +344,12 @@ def train_cnn(
     # Save best model
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
-        logger.info(f"Restored best model (val_loss: {best_val_loss:.4f})")
+        logger.info(
+            "Restored best model "
+            f"(val_loss: {best_val_loss:.4f}, "
+            f"val_track_error_px: {best_val_track_pixel_error:.1f}, "
+            f"val_argmax_error_px: {best_val_argmax_pixel_error:.1f})"
+        )
 
     # Create output directory if needed
     output_dir = os.path.dirname(output_path)

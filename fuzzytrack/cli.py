@@ -4,11 +4,13 @@ from datetime import datetime
 from pathlib import Path
 
 import click
+import pandas as pd
 
 from .annotation import annotate_video
 from .config import load_config
 from .tracking import track_video
 from .training import train_cnn as train_cnn_func
+from .video import get_video_info
 
 LABEL_SUFFIX = "_labels.csv"
 
@@ -30,6 +32,98 @@ def main():
 def _default_labels_path(video_path: Path) -> Path:
     """Return the default annotation CSV path for a video."""
     return video_path.with_name(f"{video_path.stem}{LABEL_SUFFIX}")
+
+
+def _resolve_video_label_pairs(
+    video: tuple[str, ...], annotations: tuple[str, ...]
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Resolve explicit or auto-discovered video/label pairs."""
+    if not video:
+        raise click.BadParameter("Must provide at least one --video")
+    if annotations and len(video) != len(annotations):
+        raise click.BadParameter(
+            f"Number of videos ({len(video)}) must match number of annotations ({len(annotations)})"
+        )
+    if annotations:
+        return video, annotations
+
+    discovered_annotations = []
+    missing_annotations = []
+    for video_path_str in video:
+        video_path = Path(video_path_str)
+        labels_path = _default_labels_path(video_path)
+        if labels_path.exists():
+            discovered_annotations.append(str(labels_path))
+        else:
+            missing_annotations.append(str(labels_path))
+
+    if missing_annotations:
+        missing = ", ".join(missing_annotations)
+        raise click.BadParameter(
+            "No --annotations were provided and the following label files were not found: "
+            f"{missing}"
+        )
+
+    annotations = tuple(discovered_annotations)
+    click.echo(f"Auto-discovered {len(annotations)} label file(s)")
+    return video, annotations
+
+
+def _print_coverage_report(video_path: str, annotations_path: str, grid_size: int) -> None:
+    """Print a spatial coverage report for one video/labels pair."""
+    video_info = get_video_info(video_path, require_square=True)
+    frame_width = video_info.width
+    frame_height = video_info.height
+    df = pd.read_csv(annotations_path)
+
+    required_columns = {"frame_idx", "x", "y"}
+    missing_columns = required_columns - set(df.columns)
+    if missing_columns:
+        missing = ", ".join(sorted(missing_columns))
+        raise ValueError(
+            f"Annotation CSV is missing required column(s): {missing} ({annotations_path})"
+        )
+    if df.empty:
+        raise ValueError(f"Annotation CSV is empty: {annotations_path}")
+
+    grid_counts: dict[tuple[int, int], int] = {}
+    for row in df.loc[:, ["x", "y"]].itertuples(index=False):
+        grid_x = min(int(row.x / frame_width * grid_size), grid_size - 1)
+        grid_y = min(int(row.y / frame_height * grid_size), grid_size - 1)
+        grid_counts[(grid_x, grid_y)] = grid_counts.get((grid_x, grid_y), 0) + 1
+
+    total_cells = grid_size * grid_size
+    covered_cells = len(grid_counts)
+    click.echo(f"\n{Path(video_path).name}")
+    click.echo(f"  Labels: {Path(annotations_path).name}")
+    click.echo(f"  Samples: {len(df)}")
+    click.echo(
+        f"  Covered cells: {covered_cells}/{total_cells} ({100 * covered_cells / total_cells:.1f}%)"
+    )
+    click.echo("  Grid counts:")
+    for gy in range(grid_size):
+        row_counts = " ".join(f"{grid_counts.get((gx, gy), 0):3d}" for gx in range(grid_size))
+        click.echo(f"    Row {gy}: {row_counts}")
+
+    min_samples = 3
+    undersampled = [
+        (gx, gy)
+        for gy in range(grid_size)
+        for gx in range(grid_size)
+        if grid_counts.get((gx, gy), 0) < min_samples
+    ]
+    if undersampled:
+        click.echo(f"  Cells with < {min_samples} samples: {len(undersampled)}")
+        for gx, gy in undersampled[:5]:
+            x_range = (
+                f"{int(gx * frame_width / grid_size)}-{int((gx + 1) * frame_width / grid_size)}"
+            )
+            y_range = (
+                f"{int(gy * frame_height / grid_size)}-{int((gy + 1) * frame_height / grid_size)}"
+            )
+            click.echo(
+                f"    Cell [{gx},{gy}]: x={x_range}, y={y_range} ({grid_counts.get((gx, gy), 0)} samples)"
+            )
 
 
 @main.command()
@@ -99,32 +193,7 @@ def train_cnn(video, annotations, data_root, config, output):
         annotations = tuple(annotations_list)
         click.echo(f"Loaded {len(video)} video/annotation pairs from {data_root}")
     else:
-        if not video:
-            raise click.BadParameter("Must provide either --data-root OR at least one --video")
-        if annotations and len(video) != len(annotations):
-            raise click.BadParameter(
-                f"Number of videos ({len(video)}) must match number of annotations ({len(annotations)})"
-            )
-        if not annotations:
-            discovered_annotations = []
-            missing_annotations = []
-            for video_path_str in video:
-                video_path = Path(video_path_str)
-                labels_path = _default_labels_path(video_path)
-                if labels_path.exists():
-                    discovered_annotations.append(str(labels_path))
-                else:
-                    missing_annotations.append(str(labels_path))
-
-            if missing_annotations:
-                missing = ", ".join(missing_annotations)
-                raise click.BadParameter(
-                    "No --annotations were provided and the following label files were not found: "
-                    f"{missing}"
-                )
-
-            annotations = tuple(discovered_annotations)
-            click.echo(f"Auto-discovered {len(annotations)} label file(s)")
+        video, annotations = _resolve_video_label_pairs(video, annotations)
 
     cfg = load_config(config)
 
@@ -135,6 +204,7 @@ def train_cnn(video, annotations, data_root, config, output):
     learning_rate = cfg["training"]["learning_rate"]
     val_split = cfg["training"]["val_split"]
     heatmap_sigma = cfg["heatmap"]["sigma"]
+    peak_blend_alpha = cfg["tracking"].get("peak_blend_alpha", 0.25)
     num_workers = cfg["training"].get("num_workers", 4)
     pin_memory = cfg["training"].get("pin_memory", True)
     cache_frames = cfg["training"].get("cache_frames", True)
@@ -158,6 +228,7 @@ def train_cnn(video, annotations, data_root, config, output):
         logdir=logdir,
         backbone=backbone,
         heatmap_sigma=heatmap_sigma,
+        peak_blend_alpha=peak_blend_alpha,
         num_workers=num_workers,
         pin_memory=pin_memory,
         cache_frames=cache_frames,
@@ -269,3 +340,31 @@ def annotate(video, input_csv, num_samples):
         num_samples=num_samples,
         input_csv=input_csv,
     )
+
+
+@main.command("coverage")
+@click.option(
+    "--video",
+    "-v",
+    multiple=True,
+    type=click.Path(exists=True),
+    help="Video file(s) - can specify multiple",
+)
+@click.option(
+    "--annotations",
+    "-a",
+    multiple=True,
+    type=click.Path(exists=True),
+    help="Label CSV(s) - defaults to auto-discovered *_labels.csv",
+)
+@click.option("--grid-size", default=4, type=click.IntRange(min=2), help="Coverage grid size")
+def coverage(video, annotations, grid_size):
+    """Report annotation spatial coverage for one or more videos."""
+    video, annotations = _resolve_video_label_pairs(video, annotations)
+    for video_path, annotations_path in zip(video, annotations, strict=True):
+        _raise_click_error(
+            _print_coverage_report,
+            video_path=video_path,
+            annotations_path=annotations_path,
+            grid_size=grid_size,
+        )
