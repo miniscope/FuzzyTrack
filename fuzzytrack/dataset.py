@@ -20,11 +20,20 @@ def _build_input_frame(
     if input_mode == "grayscale_diff":
         gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
         return np.expand_dims(gray.astype(np.float32) / 255.0, axis=0)
+    if input_mode == "gray_current":
+        gray = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2GRAY)
+        return np.expand_dims(gray.astype(np.float32) / 255.0, axis=0)
     if input_mode == "red_diff":
         red = diff[:, :, 2].astype(np.float32) / 255.0
         return np.expand_dims(red, axis=0)
+    if input_mode == "red_current":
+        red = curr_frame[:, :, 2].astype(np.float32) / 255.0
+        return np.expand_dims(red, axis=0)
     if input_mode == "rgb_diff":
         rgb = cv2.cvtColor(diff, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        return np.transpose(rgb, (2, 0, 1))
+    if input_mode == "rgb_current":
+        rgb = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
         return np.transpose(rgb, (2, 0, 1))
     raise ValueError(f"Unknown input_mode: {input_mode}")
 
@@ -152,7 +161,7 @@ class FrameDataset(Dataset):
                 ret2, frame_curr = cap.read()
 
             if not ret1 or not ret2:
-                channels = 3 if self.input_mode == "rgb_diff" else 1
+                channels = 3 if self.input_mode in {"rgb_diff", "rgb_current"} else 1
                 image = np.zeros((channels, IMG_SIZE[0], IMG_SIZE[1]), dtype=np.float32)
                 w_orig, h_orig = IMG_SIZE
             else:

@@ -24,8 +24,11 @@ def get_input_channels(input_mode: str) -> int:
     """Return the expected number of input channels for a configured input mode."""
     input_channels = {
         "grayscale_diff": 1,
+        "gray_current": 1,
         "red_diff": 1,
+        "red_current": 1,
         "rgb_diff": 3,
+        "rgb_current": 3,
     }
     if input_mode not in input_channels:
         raise ValueError(
