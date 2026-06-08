@@ -16,12 +16,13 @@ training:
   cache_frames: true
 
 tracking:
-  smoothing: 0.2
+  smoothing: 1
   peak_blend_alpha: 0.5  # 0.0 = weighted average, 1.0 = argmax peak
   enable_warmup: true
   warmup_frames: 30
   min_warmup_confident_frames: 10
   output_scorer: FuzzyTrack
   output_bodypart: LED
-  heatmap_min_confidence: 0.4  # Entropy-based confidence in [0, 1]
+  heatmap_min_confidence: 0.2  # Entropy-based confidence in [0, 1]
   # max_speed: 0.1  # Optional normalized per-frame movement cap
+
