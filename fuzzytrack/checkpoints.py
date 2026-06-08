@@ -56,7 +56,11 @@ def load_checkpoint(
         )
 
     saved_input_mode = metadata.get("input_mode")
-    if expected_input_mode is not None and saved_input_mode and saved_input_mode != expected_input_mode:
+    if (
+        expected_input_mode is not None
+        and saved_input_mode
+        and saved_input_mode != expected_input_mode
+    ):
         raise RuntimeError(
             f"Checkpoint input_mode mismatch: model uses '{saved_input_mode}', "
             f"config requests '{expected_input_mode}'."

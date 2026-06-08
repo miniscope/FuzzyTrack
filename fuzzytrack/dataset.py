@@ -143,7 +143,9 @@ class FrameDataset(Dataset):
 
         if self.cache_frames and frame_idx in self.frame_cache:
             curr_small = self.frame_cache[frame_idx]
-            prev_small = self.frame_cache.get(frame_idx - 1, curr_small) if frame_idx > 0 else curr_small
+            prev_small = (
+                self.frame_cache.get(frame_idx - 1, curr_small) if frame_idx > 0 else curr_small
+            )
             image = _build_input_frame(prev_small, curr_small, self.input_mode)
 
             w_orig, h_orig = self.video_size if self.video_size else IMG_SIZE
