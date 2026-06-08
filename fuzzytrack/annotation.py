@@ -4,7 +4,6 @@ import random
 from collections import defaultdict
 
 import cv2
-import numpy as np
 import pandas as pd
 
 from . import logger
@@ -98,39 +97,6 @@ def annotate_video(
             # Show crosshair if clicked
             if current_click:
                 cv2.circle(display_frame, current_click, 5, (0, 0, 255), -1)
-
-            # Draw a compact coverage heatmap in the corner.
-            grid_viz_size = 120
-            grid_cell_size = grid_viz_size // grid_size
-            grid_viz = np.zeros((grid_viz_size, grid_viz_size, 3), dtype=np.uint8)
-            max_count = max(grid_counts.values()) if grid_counts else 1
-            for gx in range(grid_size):
-                for gy in range(grid_size):
-                    count = grid_counts.get((gx, gy), 0)
-                    intensity = int(255 * min(count / max(max_count, 5), 1.0))
-                    color = (0, intensity, 0)
-                    x1 = gx * grid_cell_size
-                    y1 = gy * grid_cell_size
-                    x2 = x1 + grid_cell_size
-                    y2 = y1 + grid_cell_size
-                    cv2.rectangle(grid_viz, (x1, y1), (x2, y2), color, -1)
-                    cv2.rectangle(grid_viz, (x1, y1), (x2, y2), (100, 100, 100), 1)
-
-            x_offset = frame.shape[1] - grid_viz_size - 10
-            y_offset_viz = 10
-            display_frame[
-                y_offset_viz : y_offset_viz + grid_viz_size,
-                x_offset : x_offset + grid_viz_size,
-            ] = grid_viz
-            cv2.putText(
-                display_frame,
-                "Coverage",
-                (x_offset, y_offset_viz - 5),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.4,
-                (255, 255, 255),
-                1,
-            )
 
             # Status text
             status_text = []
