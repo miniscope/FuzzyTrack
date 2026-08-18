@@ -1,0 +1,297 @@
+"""Dataset classes for training."""
+
+import cv2
+import numpy as np
+import pandas as pd
+import torch
+from torch.utils.data import Dataset
+
+from .config import HEATMAP_SIGMA, HEATMAP_SIZE, IMG_SIZE
+from .video import get_video_info
+
+
+def _build_input_frame(
+    prev_frame: np.ndarray,
+    curr_frame: np.ndarray,
+    input_mode: str,
+) -> np.ndarray:
+    """Build a normalized model input tensor from consecutive resized BGR frames."""
+    diff = cv2.absdiff(curr_frame, prev_frame)
+    if input_mode == "grayscale_diff":
+        gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+        return np.expand_dims(gray.astype(np.float32) / 255.0, axis=0)
+    if input_mode == "gray_current":
+        gray = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2GRAY)
+        return np.expand_dims(gray.astype(np.float32) / 255.0, axis=0)
+    if input_mode == "red_diff":
+        red = diff[:, :, 2].astype(np.float32) / 255.0
+        return np.expand_dims(red, axis=0)
+    if input_mode == "red_current":
+        red = curr_frame[:, :, 2].astype(np.float32) / 255.0
+        return np.expand_dims(red, axis=0)
+    if input_mode == "rgb_diff":
+        rgb = cv2.cvtColor(diff, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        return np.transpose(rgb, (2, 0, 1))
+    if input_mode == "rgb_current":
+        rgb = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        return np.transpose(rgb, (2, 0, 1))
+    raise ValueError(f"Unknown input_mode: {input_mode}")
+
+
+class FrameDataset(Dataset):
+    """Dataset for CNN training: loads frames and returns motion difference images."""
+
+    def __init__(
+        self,
+        video_path,
+        csv_path,
+        heatmap_sigma=None,
+        input_mode="grayscale_diff",
+        cache_frames=True,
+        is_train=False,
+    ):
+        self.video_path = video_path
+        self.video_info = get_video_info(video_path, require_square=True)
+        self.df = self._load_and_validate_annotations(csv_path)
+        self.cap = None  # Opened lazily per worker (cv2.VideoCapture is not fork-safe)
+        self.heatmap_sigma = heatmap_sigma if heatmap_sigma is not None else HEATMAP_SIGMA
+        self.input_mode = input_mode
+        self.cache_frames = cache_frames
+        self.frame_cache = {}
+        self.video_size = (self.video_info.width, self.video_info.height)
+        self.is_train = is_train  # Enable data augmentation for training
+
+        if cache_frames:
+            self._preload_frames()
+
+    def _load_and_validate_annotations(self, csv_path):
+        """Load annotation CSV and validate required columns and bounds."""
+        df = pd.read_csv(csv_path)
+        required_columns = {"frame_idx", "x", "y"}
+        missing_columns = required_columns - set(df.columns)
+        if missing_columns:
+            missing = ", ".join(sorted(missing_columns))
+            raise ValueError(
+                f"Annotation CSV is missing required column(s): {missing} ({csv_path})"
+            )
+        if df.empty:
+            raise ValueError(f"Annotation CSV is empty: {csv_path}")
+
+        df = df.loc[:, ["frame_idx", "x", "y"]].copy()
+        for column in ["frame_idx", "x", "y"]:
+            df[column] = pd.to_numeric(df[column], errors="coerce")
+
+        invalid_rows = df[df[["frame_idx", "x", "y"]].isna().any(axis=1)]
+        if not invalid_rows.empty:
+            raise ValueError(f"Annotation CSV contains non-numeric values: {csv_path}")
+
+        frame_idx = df["frame_idx"]
+        if not np.allclose(frame_idx, np.round(frame_idx)):
+            raise ValueError(f"Annotation CSV has non-integer frame indices: {csv_path}")
+        df["frame_idx"] = frame_idx.astype(int)
+
+        if (df["frame_idx"] < 0).any():
+            raise ValueError(f"Annotation CSV has negative frame indices: {csv_path}")
+        if (df["frame_idx"] >= self.video_info.total_frames).any():
+            raise ValueError(
+                f"Annotation CSV has frame_idx outside video range 0-{self.video_info.total_frames - 1}: {csv_path}"
+            )
+        if ((df["x"] < 0) | (df["x"] >= self.video_info.width)).any():
+            raise ValueError(
+                f"Annotation CSV has x outside video bounds 0-{self.video_info.width - 1}: {csv_path}"
+            )
+        if ((df["y"] < 0) | (df["y"] >= self.video_info.height)).any():
+            raise ValueError(
+                f"Annotation CSV has y outside video bounds 0-{self.video_info.height - 1}: {csv_path}"
+            )
+
+        return df.sort_values("frame_idx").reset_index(drop=True)
+
+    def _preload_frames(self):
+        """Preload all required frames into memory."""
+        # Get unique frame indices needed (current and previous for each sample)
+        frame_indices = set()
+        for _, row in self.df.iterrows():
+            frame_idx = row["frame_idx"]
+            frame_indices.add(frame_idx)
+            if frame_idx > 0:
+                frame_indices.add(frame_idx - 1)
+
+        # Load frames
+        cap = cv2.VideoCapture(self.video_path)
+        for frame_idx in sorted(frame_indices):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ret, frame = cap.read()
+            if ret:
+                self.frame_cache[frame_idx] = cv2.resize(frame, IMG_SIZE)
+        cap.release()
+
+    def _get_cap(self):
+        """Get VideoCapture, opening it if needed (fork-safe)."""
+        if self.cap is None:
+            self.cap = cv2.VideoCapture(self.video_path)
+        return self.cap
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        row = self.df.iloc[idx]
+        frame_idx = row["frame_idx"]
+        target_x = row["x"]
+        target_y = row["y"]
+
+        if self.cache_frames and frame_idx in self.frame_cache:
+            curr_small = self.frame_cache[frame_idx]
+            prev_small = (
+                self.frame_cache.get(frame_idx - 1, curr_small) if frame_idx > 0 else curr_small
+            )
+            image = _build_input_frame(prev_small, curr_small, self.input_mode)
+
+            w_orig, h_orig = self.video_size if self.video_size else IMG_SIZE
+        else:
+            # Fallback to video reading
+            cap = self._get_cap()
+            if frame_idx == 0:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                ret1, frame_prev = cap.read()
+                frame_curr = frame_prev.copy() if ret1 else None
+                ret2 = ret1
+            else:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx - 1)
+                ret1, frame_prev = cap.read()
+                ret2, frame_curr = cap.read()
+
+            if not ret1 or not ret2:
+                channels = 3 if self.input_mode in {"rgb_diff", "rgb_current"} else 1
+                image = np.zeros((channels, IMG_SIZE[0], IMG_SIZE[1]), dtype=np.float32)
+                w_orig, h_orig = IMG_SIZE
+            else:
+                f_prev = cv2.resize(frame_prev, IMG_SIZE)
+                f_curr = cv2.resize(frame_curr, IMG_SIZE)
+                image = _build_input_frame(f_prev, f_curr, self.input_mode)
+                h_orig, w_orig = frame_curr.shape[:2]
+
+        # Normalize coordinates
+        norm_x = target_x / w_orig
+        norm_y = target_y / h_orig
+
+        # Apply data augmentation if training
+        if self.is_train:
+            image, norm_x, norm_y = self._augment(image, norm_x, norm_y)
+
+        heatmap = self._generate_heatmap(
+            norm_x, norm_y, HEATMAP_SIZE[0], HEATMAP_SIZE[1], self.heatmap_sigma
+        )
+        heatmap = np.expand_dims(heatmap, axis=0)
+        return torch.tensor(image), torch.tensor(heatmap, dtype=torch.float32)
+
+    def _generate_heatmap(self, x, y, h, w, sigma):
+        """Generate Gaussian heatmap from normalized coordinates."""
+        # Convert normalized coordinates to heatmap coordinates
+        # Use (w-1) and (h-1) to match extraction formula
+        hm_x = x * (w - 1)
+        hm_y = y * (h - 1)
+
+        # Clamp to valid range
+        hm_x = np.clip(hm_x, 0, w - 1)
+        hm_y = np.clip(hm_y, 0, h - 1)
+
+        # Generate Gaussian (unnormalized - peak value is 1.0)
+        y_coords, x_coords = np.ogrid[:h, :w]
+        heatmap = np.exp(-((x_coords - hm_x) ** 2 + (y_coords - hm_y) ** 2) / (2 * sigma**2))
+
+        # Keep unnormalized - peak is 1.0, away from center approaches 0
+        return heatmap.astype(np.float32)
+
+    def _augment(self, image, norm_x, norm_y):
+        """Apply data augmentation to image and coordinates.
+
+        Args:
+            image: (1, H, W) normalized image
+            norm_x, norm_y: normalized coordinates (0-1)
+
+        Returns:
+            Augmented image and coordinates
+        """
+        import random
+
+        image = np.moveaxis(image, 0, -1)
+        h, w = image.shape[:2]
+
+        # 1. PHOTOMETRIC AUGMENTATIONS (don't affect coordinates)
+        # Random brightness (70% to 130%)
+        if random.random() > 0.5:
+            brightness_factor = random.uniform(0.7, 1.3)
+            image = np.clip(image * brightness_factor, 0, 1)
+
+        # Random contrast (70% to 130%)
+        if random.random() > 0.5:
+            contrast_factor = random.uniform(0.7, 1.3)
+            mean = image.mean()
+            image = np.clip((image - mean) * contrast_factor + mean, 0, 1)
+
+        # Random Gaussian noise
+        if random.random() > 0.5:
+            noise = np.random.normal(0, 0.02, image.shape)
+            image = np.clip(image + noise, 0, 1)
+
+        # 2. GEOMETRIC AUGMENTATIONS (affect both image and coordinates)
+        # Horizontal flip (50% chance)
+        if random.random() > 0.5:
+            image = np.fliplr(image).copy()
+            norm_x = 1.0 - norm_x
+
+        # Vertical flip (50% chance)
+        if random.random() > 0.5:
+            image = np.flipud(image).copy()
+            norm_y = 1.0 - norm_y
+
+        # Random scaling helps reduce center bias in the learned prior.
+        if random.random() > 0.5:
+            scale = random.uniform(0.85, 1.15)
+            center = (w // 2, h // 2)
+            M = cv2.getRotationMatrix2D(center, 0, scale)
+            image = cv2.warpAffine(image, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
+
+            cx, cy = 0.5, 0.5
+            dx = (norm_x - cx) * scale
+            dy = (norm_y - cy) * scale
+            norm_x = np.clip(cx + dx, 0, 1)
+            norm_y = np.clip(cy + dy, 0, 1)
+
+        # Larger translations improve edge coverage.
+        if random.random() > 0.5:
+            tx = random.uniform(-0.15, 0.15)
+            ty = random.uniform(-0.15, 0.15)
+
+            # Translate image
+            M = np.float32([[1, 0, tx * w], [0, 1, ty * h]])
+            image = cv2.warpAffine(image, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
+
+            # Translate coordinates
+            norm_x = np.clip(norm_x + tx, 0, 1)
+            norm_y = np.clip(norm_y + ty, 0, 1)
+
+        # Small random rotation (-10 to +10 degrees)
+        if random.random() > 0.5:
+            angle = random.uniform(-10, 10)
+            center = (w // 2, h // 2)
+            M = cv2.getRotationMatrix2D(center, angle, 1.0)
+            image = cv2.warpAffine(image, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
+
+            # Rotate coordinates around center
+            cx, cy = 0.5, 0.5  # Normalized center
+            dx = norm_x - cx
+            dy = norm_y - cy
+            angle_rad = np.radians(angle)
+            new_dx = dx * np.cos(angle_rad) - dy * np.sin(angle_rad)
+            new_dy = dx * np.sin(angle_rad) + dy * np.cos(angle_rad)
+            norm_x = np.clip(cx + new_dx, 0, 1)
+            norm_y = np.clip(cy + new_dy, 0, 1)
+
+        if image.ndim == 2:
+            image = np.expand_dims(image, axis=-1)
+        image = np.moveaxis(image, -1, 0)
+
+        return image, norm_x, norm_y

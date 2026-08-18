@@ -2,17 +2,17 @@ zones:
   Room_1:
     type: room
     connections:
-      - Tube_1
-      - Tube_2
-      - Tube_3
+      - Arm_1
+      - Arm_2
+      - Arm_3
   Room_2:
     type: room
     connections:
-      - Tube_1
-      - Tube_3
-      - Tube_4
+      - Arm_1
+      - Arm_3
+      - Arm_4
   Room_3:
     type: room
     connections:
-      - Tube_2
-      - Tube_4
+      - Arm_2
+      - Arm_4

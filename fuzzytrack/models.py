@@ -1,13 +1,13 @@
-"""Neural network models for mouse tracking."""
+"""Neural network models for FuzzyTrack."""
+
 import torch
 import torch.nn as nn
 import torchvision.models as models
-from .config import HEATMAP_SIZE
 
 # Backbone configurations: (model_func, weights, feature_dim)
 BACKBONES = {
-    'resnet18': (models.resnet18, 'ResNet18_Weights', 512),
-    'resnet50': (models.resnet50, 'ResNet50_Weights', 2048),
+    "resnet18": (models.resnet18, "ResNet18_Weights", 512),
+    "resnet50": (models.resnet50, "ResNet50_Weights", 2048),
 }
 
 
@@ -20,28 +20,58 @@ def get_backbone(name: str):
     return model_func, weights, feature_dim
 
 
-class MouseCNN(nn.Module):
-    def __init__(self, backbone: str = 'resnet18'):
-        super().__init__()
-        model_func, weights, feature_dim = get_backbone(backbone)
-        self.backbone = model_func(weights=weights)
-        self.backbone.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        self.backbone.fc = nn.Identity()
-        self.coord_head = nn.Linear(feature_dim, 2)
+def get_input_channels(input_mode: str) -> int:
+    """Return the expected number of input channels for a configured input mode."""
+    input_channels = {
+        "grayscale_diff": 1,
+        "gray_current": 1,
+        "red_diff": 1,
+        "red_current": 1,
+        "rgb_diff": 3,
+        "rgb_current": 3,
+    }
+    if input_mode not in input_channels:
+        raise ValueError(
+            f"Unknown input_mode: {input_mode}. Choose from: {list(input_channels.keys())}"
+        )
+    return input_channels[input_mode]
 
-    def forward(self, x):
-        features = self.backbone(x)
-        return torch.sigmoid(self.coord_head(features))
+
+def _make_input_conv(conv1: nn.Conv2d, input_channels: int) -> nn.Conv2d:
+    """Adapt a pretrained ResNet stem to the requested input channel count."""
+    if input_channels == conv1.in_channels:
+        return conv1
+
+    new_conv = nn.Conv2d(
+        input_channels,
+        conv1.out_channels,
+        kernel_size=conv1.kernel_size,
+        stride=conv1.stride,
+        padding=conv1.padding,
+        bias=False,
+    )
+
+    with torch.no_grad():
+        if input_channels == 1:
+            new_conv.weight.copy_(conv1.weight.mean(dim=1, keepdim=True))
+        else:
+            repeat_count = (input_channels + conv1.in_channels - 1) // conv1.in_channels
+            repeated = conv1.weight.repeat(1, repeat_count, 1, 1)[:, :input_channels]
+            repeated *= conv1.in_channels / input_channels
+            new_conv.weight.copy_(repeated)
+    return new_conv
 
 
 class MouseHeatmapCNN(nn.Module):
     """CNN that predicts a heatmap instead of direct coordinates."""
-    def __init__(self, backbone: str = 'resnet18'):
+
+    def __init__(self, backbone: str = "resnet18", input_mode: str = "grayscale_diff"):
         super().__init__()
         model_func, weights, feature_dim = get_backbone(backbone)
+        input_channels = get_input_channels(input_mode)
         # Use backbone but remove final pooling to get spatial features
         bb = model_func(weights=weights)
-        bb.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        bb.conv1 = _make_input_conv(bb.conv1, input_channels)
 
         # Remove avgpool and fc, keep only conv layers
         self.backbone = nn.Sequential(*list(bb.children())[:-2])  # Remove avgpool and fc
@@ -70,7 +100,7 @@ class MouseHeatmapCNN(nn.Module):
         """Initialize heatmap head with proper weights."""
         for m in self.heatmap_head.modules():
             if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d)):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.BatchNorm2d):
